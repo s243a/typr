@@ -60,9 +60,17 @@ let len <- fn(a: char): int;
 
 @plot: (a: [#N, num], b: [#N, num], type: char) -> .None;
 
-@get: (a: {}, b: char) -> T;
+@cat: (a: Any) -> .None;
 
-@print: (a: char) -> .None;
+@print: (a: Any) -> .None;
+
+@message: (a: char) -> .None;
+
+@paste: (a: Any) -> char;
+
+@paste0: (a: Any) -> char;
+
+@sprintf: (a: char, b: Any) -> char;
 
 @seq: (a: #I, b: #J, c: #K) -> [#J-#I/#K, int];
 
