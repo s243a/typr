@@ -1,0 +1,9 @@
+@cat: (char) -> .None;
+@cat: (int) -> .None;
+@cat: (num) -> .None;
+@print: (char) -> .None;
+@print: (int) -> .None;
+@print: (num) -> .None;
+@message: (char) -> .None;
+@paste: (char, char) -> char;
+@paste0: (char, char) -> char;

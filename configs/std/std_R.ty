@@ -1,18 +1,157 @@
 @`+`: (int, int) -> int;
 @`+`: (num, num) -> num;
+@`+`: (char, char) -> char;
 @`-`: (int, int) -> int;
 @`-`: (num, num) -> num;
 @`/`: (int, int) -> int;
 @`/`: (num, num) -> num;
 @`*`: (int, int) -> int;
 @`*`: (num, num) -> num;
+@`%%`: (int, int) -> int;
+@`%/%`: (int, int) -> int;
+@`^`: (num, num) -> num;
 @`&&`: (bool, bool) -> bool;
 @`||`: (bool, bool) -> bool;
+@`!`: (bool) -> bool;
+@`==`: (T, T) -> bool;
+@`!=`: (T, T) -> bool;
+@`<`: (num, num) -> bool;
+@`>`: (num, num) -> bool;
+@`<=`: (num, num) -> bool;
+@`>=`: (num, num) -> bool;
+@`<`: (int, int) -> bool;
+@`>`: (int, int) -> bool;
+@`<=`: (int, int) -> bool;
+@`>=`: (int, int) -> bool;
 @`+`: (Vec[#M, T], Vec[#M, T]) -> Vec[#M, T];
+
+# Type conversion
 @as__character: (Any) -> char;
-@source: (char) -> Empty;
-@reduce: ([#N, T], (T, U) -> T) -> T;
+@as__numeric: (Any) -> num;
+@as__integer: (Any) -> int;
+@as__logical: (Any) -> bool;
+@is__numeric: (Any) -> bool;
+@is__character: (Any) -> bool;
+@is__logical: (Any) -> bool;
+@is__integer: (Any) -> bool;
+@is__null: (Any) -> bool;
+@is__na: (Any) -> bool;
+
+# Output
+@cat: (char) -> .None;
+@cat: (int) -> .None;
+@cat: (num) -> .None;
+@print: (char) -> .None;
+@print: (int) -> .None;
+@print: (num) -> .None;
+@message: (char) -> .None;
+@warning: (char) -> .None;
+@stop: (char) -> .None;
+@paste: (char, char) -> char;
+@paste0: (char, char) -> char;
+@sprintf: (char, char) -> char;
+@format: (num) -> char;
+@format: (int) -> char;
+
+# Math
+@abs: (num) -> num;
+@abs: (int) -> int;
+@sqrt: (num) -> num;
+@ceiling: (num) -> int;
+@floor: (num) -> int;
+@round: (num) -> num;
+@log: (num) -> num;
+@log2: (num) -> num;
+@log10: (num) -> num;
+@exp: (num) -> num;
+@sin: (num) -> num;
+@cos: (num) -> num;
+@tan: (num) -> num;
+@pi: num;
+
+# Vectors
+@c: (T) -> [#N, T];
+@length: ([#N, T]) -> int;
+@length: (char) -> int;
+@rep: (T, int) -> [#N, T];
+@seq: (num, num) -> [#N, num];
+@seq__len: (int) -> [#N, int];
+@sort: ([#N, T]) -> [#N, T];
+@rev: ([#N, T]) -> [#N, T];
+@unique: ([#N, T]) -> [#N, T];
+@which: ([#N, bool]) -> [#N, int];
+@any: ([#N, bool]) -> bool;
+@all: ([#N, bool]) -> bool;
 @sum: ([#N, T]) -> T;
+@prod: ([#N, T]) -> T;
+@min: ([#N, T]) -> T;
+@max: ([#N, T]) -> T;
+@mean: ([#N, num]) -> num;
+@median: ([#N, num]) -> num;
+@sd: ([#N, num]) -> num;
+@var: ([#N, num]) -> num;
+@range: ([#N, T]) -> [#N, T];
+@head: ([#N, T], int) -> [#N, T];
+@tail: ([#N, T], int) -> [#N, T];
+@append: ([#N, T], T) -> [#N, T];
+
+# Strings
+@nchar: (char) -> int;
+@substr: (char, int, int) -> char;
+@substring: (char, int, int) -> char;
+@sub: (char, char, char) -> char;
+@gsub: (char, char, char) -> char;
+@grep: (char, [#N, char]) -> [#N, int];
+@grepl: (char, char) -> bool;
+@regmatches: (char, Any) -> [#N, char];
+@strsplit: (char, char) -> [#N, char];
+@tolower: (char) -> char;
+@toupper: (char) -> char;
+@trimws: (char) -> char;
+@startsWith: (char, char) -> bool;
+@endsWith: (char, char) -> bool;
+
+# Data structures
+@names: (Any) -> [#N, char];
+@class: (Any) -> char;
+@typeof: (Any) -> char;
+@str: (Any) -> .None;
+@summary: (Any) -> .None;
+@exists: (char) -> bool;
+@assign: (char, Any) -> .None;
+
+# Functional
+@reduce: ([#N, T], (T, U) -> T) -> T;
+@Map: ((T) -> U, [#N, T]) -> [#N, U];
+@Filter: ((T) -> bool, [#N, T]) -> [#N, T];
+@Reduce: ((T, T) -> T, [#N, T]) -> T;
+@sapply: ([#N, T], (T) -> U) -> [#N, U];
+@lapply: ([#N, T], (T) -> U) -> [#N, U];
+@vapply: ([#N, T], (T) -> U, U) -> [#N, U];
+
+# I/O
+@source: (char) -> Empty;
+@readLines: (char) -> [#N, char];
+@writeLines: ([#N, char], char) -> .None;
+@file__exists: (char) -> bool;
+@readline: (char) -> char;
+
+# Environment
+@ls: () -> [#N, char];
+@rm: (char) -> .None;
+
+# Control flow
+@ifelse: (bool, T, T) -> T;
+@switch: (char, Any) -> Any;
+@tryCatch: (Any) -> Any;
+@try: (Any) -> Any;
+@on__exit: (Any) -> .None;
+@Sys__time: () -> num;
+@Sys__sleep: (num) -> .None;
+@invisible: (T) -> T;
+@return: (T) -> T;
+
+# Testing
 @test_that: (char, Any) -> Empty;
 @expect_true: (bool) -> Empty;
 @expect_false: (T, T) -> Empty;

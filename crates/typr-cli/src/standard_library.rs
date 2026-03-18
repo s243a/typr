@@ -262,6 +262,7 @@ const DEFAULT_TY: &str = include_str!("../configs/std/default.ty");
 const FILE_TY: &str = include_str!("../configs/std/file.ty");
 const OPTION_TY: &str = include_str!("../configs/std/option.ty");
 const PLOT_TY: &str = include_str!("../configs/std/plot.ty");
+const IO_TY: &str = include_str!("../configs/std/io.ty");
 const LIN_ALG_TY: &str = include_str!("../configs/std/lin_alg.ty");
 const SYSTEM_TY: &str = include_str!("../configs/std/system.ty");
 
@@ -369,6 +370,7 @@ pub fn standard_library() {
     let r_ty_sources: Vec<(&str, &str)> = vec![
         ("std_R.ty", STD_R_TY),
         ("default.ty", DEFAULT_TY),
+        ("io.ty", IO_TY),
         ("file.ty", FILE_TY),
         ("option.ty", OPTION_TY),
         ("plot.ty", PLOT_TY),
