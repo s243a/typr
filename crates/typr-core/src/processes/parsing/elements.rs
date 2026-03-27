@@ -27,6 +27,7 @@ use crate::components::r#type::Type;
 use nom::character::complete::char;
 use nom::bytes::complete::escaped;
 use nom::bytes::complete::is_not;
+use nom::bytes::complete::take_until;
 use nom::combinator::recognize;
 use nom::bytes::complete::tag;
 use nom::sequence::terminated;
@@ -752,6 +753,24 @@ fn js_block(s: Span) -> IResult<Span, Lang> {
     }
 }
 
+/// Parse @{ ... }@ raw R code block — content passed through verbatim to R output.
+fn raw_r_block(s: Span) -> IResult<Span, Lang> {
+    let start = tag("@{");
+    let end = tag("}@");
+    let res = delimited(
+        terminated(start, multispace0),
+        take_until("}@"),
+        terminated(end, multispace0),
+    ).parse(s);
+    match res {
+        Ok((s, content)) => {
+            let raw_code = (*content.fragment()).to_string();
+            Ok((s, Lang::RawRBlock(raw_code, content.into())))
+        }
+        Err(r) => Err(r),
+    }
+}
+
 fn primitive(s: Span) -> IResult<Span, Lang> {
     alt((boolean, number, integer, chars)).parse(s)
 }
@@ -784,6 +803,7 @@ pub fn single_element(s: Span) -> IResult<Span, Lang> {
         range,
         lambda,
         primitive,
+        raw_r_block,
         js_block,
         return_exp,
         match_exp,

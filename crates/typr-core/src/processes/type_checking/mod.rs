@@ -1149,6 +1149,10 @@ pub fn typing(context: &Context, expr: &Lang) -> TypeContext {
                 .with_lang(&new_expr, &new_context)
                 .into()
         }
+        Lang::RawRBlock(_, _h) => {
+            // Raw R blocks are opaque — type is 'any'
+            TypeContext::new(builder::any_type(), expr.clone(), context.clone())
+        }
         Lang::Let(..) => eval(context, expr),
         Lang::Assign(..) => eval(context, expr),
         Lang::Alias(..) => eval(context, expr).with_lang(expr).into(),

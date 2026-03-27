@@ -559,6 +559,10 @@ impl RTranslatable<(String, Context)> for Lang {
                 let res = exp.to_js(&js_cont).0;
                 (format!("'{}{}'", JS_HEADER, res), cont.clone())
             }
+            Lang::RawRBlock(code, _h) => {
+                // Emit raw R code verbatim — no transformation
+                (code.trim().to_string(), cont.clone())
+            }
             Lang::WhileLoop(condition, body, _) => (
                 format!(
                     "while ({}) {{\n{}\n}}",
