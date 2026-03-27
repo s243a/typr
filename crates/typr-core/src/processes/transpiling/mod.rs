@@ -237,21 +237,36 @@ impl RTranslatable<(String, Context)> for Lang {
                 .add("\n}")
                 .into(),
             Lang::Function(args, _, body, _) => {
-                let fn_type = FunctionType::try_from(typing(cont, self).value.clone()).unwrap();
-                let output_conversion = cont.get_type_anotation(&fn_type.get_return_type());
-                let res = (output_conversion == "")
-                    .then_some("".to_string())
-                    .unwrap_or(" |> ".to_owned() + &output_conversion);
-                (
-                    format!(
-                        "(function({}) {}{}) |> {}",
-                        args.iter().map(|x| x.to_r()).collect::<Vec<_>>().join(", "),
-                        body.to_r(cont).0,
-                        res,
-                        cont.get_type_anotation(&fn_type.into())
-                    ),
-                    cont.clone(),
-                )
+                let typed = typing(cont, self).value.clone();
+                match FunctionType::try_from(typed) {
+                    Ok(fn_type) => {
+                        let output_conversion = cont.get_type_anotation(&fn_type.get_return_type());
+                        let res = (output_conversion == "")
+                            .then_some("".to_string())
+                            .unwrap_or(" |> ".to_owned() + &output_conversion);
+                        (
+                            format!(
+                                "(function({}) {}{}) |> {}",
+                                args.iter().map(|x| x.to_r()).collect::<Vec<_>>().join(", "),
+                                body.to_r(cont).0,
+                                res,
+                                cont.get_type_anotation(&fn_type.into())
+                            ),
+                            cont.clone(),
+                        )
+                    }
+                    Err(_) => {
+                        // Type inference failed (e.g. body contains RawRBlock) — emit without type annotations
+                        (
+                            format!(
+                                "function({}) \n{{ {} }}",
+                                args.iter().map(|x| x.to_r()).collect::<Vec<_>>().join(", "),
+                                body.to_r(cont).0,
+                            ),
+                            cont.clone(),
+                        )
+                    }
+                }
             }
             Lang::Variable(_, _, _, _) => {
                 //Here we only keep the variable name, the path and the type
@@ -505,13 +520,17 @@ impl RTranslatable<(String, Context)> for Lang {
                 .to_r_safe(body)
                 .add("\n}")
                 .into(),
-            Lang::RFunction(vars, body, _) => Translatable::from(cont.clone())
-                .add("function (")
-                .join(vars, ", ")
-                .add(") \n")
-                .add(&body)
-                .add("\n")
-                .into(),
+            Lang::RFunction(vars, body, _) => {
+                // Strip @{ and }@ markers from raw R blocks in function body
+                let clean_body = body.replace("@{", "").replace("}@", "");
+                Translatable::from(cont.clone())
+                    .add("function (")
+                    .join(vars, ", ")
+                    .add(") \n")
+                    .add(&clean_body)
+                    .add("\n")
+                    .into()
+            }
             Lang::Signature(_, _, _) => ("".to_string(), cont.clone()),
             Lang::Alias(_, _, _, _) => ("".to_string(), cont.clone()),
             Lang::KeyValue(k, v, _) => (format!("{} = {}", k, v.to_r(cont).0), cont.clone()),
