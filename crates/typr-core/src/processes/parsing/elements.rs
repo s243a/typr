@@ -1261,7 +1261,7 @@ fn element_operator2(s: Span) -> IResult<Span, (Lang, Op)> {
 fn vectorial_bloc(s: Span) -> IResult<Span, Lang> {
     let res = (
         terminated(tag("@{"), multispace0),
-        recognize(many1(element_operator2)),
+        take_until("}@"),
         terminated(tag("}@"), multispace0),
     )
         .parse(s);
@@ -1615,6 +1615,27 @@ mod tests {
         );
         assert!(res.is_ok(), "extern_block no-params should parse");
         assert!(matches!(res.unwrap(), Lang::ExternBlock { .. }));
+    }
+
+    #[test]
+    fn test_raw_r_block_accepts_arbitrary_r() {
+        let source = r#"@{
+            (function(x) {
+                cache <- new.env(hash = TRUE, parent = emptyenv());
+                cache$key <- x;
+                cache$key
+            })(value)
+        }@"#;
+        let parsed = parse_elements(source.into())
+            .expect("raw R block should parse")
+            .1;
+        match parsed {
+            Lang::VecBlock { value, .. } => {
+                assert!(value.contains("function(x)"));
+                assert!(value.contains("cache$key <- x"));
+            }
+            other => panic!("expected VecBlock, got {:?}", other),
+        }
     }
 
     #[test]

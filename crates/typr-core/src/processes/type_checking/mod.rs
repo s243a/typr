@@ -1591,8 +1591,10 @@ pub fn typing(context: &Context, expr: &Lang) -> TypeContext {
             TypeContext::new(Type::Tuple(types, h.clone()), expr.clone(), context.clone())
                 .with_errors(errors)
         }
-        Lang::VecBlock { help_data: h, .. } => {
-            TypeContext::new(Type::Empty(h.clone()), expr.clone(), context.clone())
+        // `@{ ... }@` is opaque raw R: TypR cannot infer its result, but it may
+        // legitimately be used wherever a value is expected.
+        Lang::VecBlock { .. } => {
+            TypeContext::new(builder::any_type(), expr.clone(), context.clone())
         }
         Lang::RFunction { help_data: h, .. } => TypeContext::new(
             Type::UnknownFunction(h.clone()),

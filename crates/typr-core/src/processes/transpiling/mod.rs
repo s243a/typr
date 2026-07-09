@@ -1388,13 +1388,18 @@ impl RTranslatable<(String, Context)> for Lang {
                 parameters: vars,
                 body,
                 ..
-            } => Translatable::from(cont.clone())
-                .add("function (")
-                .join(vars, ", ")
-                .add(") \n")
-                .add(body)
-                .add("\n")
-                .into(),
+            } => {
+                // RFunction bodies are stored as raw strings rather than parsed
+                // Lang nodes, so unwrap any TypR raw-R delimiters here.
+                let clean_body = body.replace("@{", "").replace("}@", "");
+                Translatable::from(cont.clone())
+                    .add("function (")
+                    .join(vars, ", ")
+                    .add(") \n")
+                    .add(&clean_body)
+                    .add("\n")
+                    .into()
+            }
             Lang::ExternBlock {
                 parameters: params,
                 body,
@@ -3682,6 +3687,21 @@ mod tests {
             r_str.contains("dplyr::filter("),
             "expected dplyr::filter(...), got: {r_str}"
         );
+    }
+
+    #[test]
+    fn test_r_function_strips_raw_r_markers() {
+        let r_str = FluentParser::new()
+            .check_transpiling(
+                r#"let helper <- function(x) { result <- @{ paste0(x, "!") }@; result };"#,
+            )
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(r_str.contains("paste0(x, \"!\")"), "got: {r_str}");
+        assert!(!r_str.contains("@{"), "raw marker leaked into R: {r_str}");
+        assert!(!r_str.contains("}@"), "raw marker leaked into R: {r_str}");
     }
 
     #[test]
