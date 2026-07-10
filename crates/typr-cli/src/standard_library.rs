@@ -262,9 +262,11 @@ const DEFAULT_TY: &str = include_str!("../configs/std/default.ty");
 const FILE_TY: &str = include_str!("../configs/std/file.ty");
 const OPTION_TY: &str = include_str!("../configs/std/option.ty");
 const PLOT_TY: &str = include_str!("../configs/std/plot.ty");
-const IO_TY: &str = include_str!("../configs/std/io.ty");
 const LIN_ALG_TY: &str = include_str!("../configs/std/lin_alg.ty");
 const SYSTEM_TY: &str = include_str!("../configs/std/system.ty");
+const FACTOR_TY: &str = include_str!("../configs/std/factor.ty");
+const STATE_TY: &str = include_str!("../configs/std/state.ty");
+const FOREIGN_TY: &str = include_str!("../configs/std/foreign.ty");
 
 // Embedded source files for JS
 const FUNCTIONS_JS: &str = include_str!("../configs/src/functions_JS.txt");
@@ -325,11 +327,7 @@ fn build_typed_vartype(ty_sources: &[(&str, &str)]) -> VarType {
 
 /// All paths where binary files should be written (relative to the app root).
 fn bin_output_paths() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("crates/typr-core/configs/bin"),
-        PathBuf::from("crates/typr-cli/configs/bin"),
-        PathBuf::from("configs/bin"),
-    ]
+    vec![PathBuf::from("crates/typr-core/configs/bin")]
 }
 
 /// Save a VarType to a .bin file in all output directories.
@@ -370,12 +368,14 @@ pub fn standard_library() {
     let r_ty_sources: Vec<(&str, &str)> = vec![
         ("std_R.ty", STD_R_TY),
         ("default.ty", DEFAULT_TY),
-        ("io.ty", IO_TY),
         ("file.ty", FILE_TY),
         ("option.ty", OPTION_TY),
         ("plot.ty", PLOT_TY),
         ("lin_alg.ty", LIN_ALG_TY),
         ("system.ty", SYSTEM_TY),
+        ("factor.ty", FACTOR_TY),
+        ("state.ty", STATE_TY),
+        ("foreign.ty", FOREIGN_TY),
     ];
     let std_r_typed = build_typed_vartype(&r_ty_sources);
     save_to_all(&std_r_typed, ".std_r_typed.bin", &dirs);

@@ -1,0 +1,7 @@
+mod person;
+
+use person::Person;
+use person::plus_one_year;
+
+Person:{ age: 12, name: "Bob" }
+	.plus_one_year()

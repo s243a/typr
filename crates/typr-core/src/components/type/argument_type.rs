@@ -1,15 +1,25 @@
 use crate::components::context::Context;
 use crate::components::error_message::help_data::HelpData;
 use crate::components::language::var::Var;
+use crate::components::language::Lang;
 use crate::components::r#type::tchar::Tchar;
 use crate::components::r#type::type_system::TypeSystem;
+use crate::components::r#type::vector_type::VecType;
 use crate::components::r#type::Type;
+use crate::processes::transpiling::translatable::RTranslatable;
 use crate::processes::type_checking::type_comparison::reduce_type;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq)] // 3 argument is for the embedding
-pub struct ArgumentType(pub Type, pub Type, pub bool);
+// 3rd bool = is_embedded, 4th bool = is_variadic, 5th = default value expression
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArgumentType(
+    pub Type,
+    pub Type,
+    pub bool,
+    pub bool,
+    pub Option<Box<Lang>>,
+);
 
 impl PartialEq for ArgumentType {
     fn eq(&self, other: &Self) -> bool {
@@ -20,22 +30,36 @@ impl PartialEq for ArgumentType {
     }
 }
 
+// `Lang` (the default-value expression in field `.4`) implements neither `Eq`
+// nor `Hash`, so this can't be derived. It's a marker trait with no methods,
+// so a hand-written impl is valid regardless of field types — consistent
+// with `PartialEq`/`Hash` above already ignoring `.2`/`.3`/`.4`.
+impl Eq for ArgumentType {}
+
 impl std::hash::Hash for ArgumentType {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state);
         self.1.hash(state);
         self.2.hash(state);
+        self.3.hash(state);
     }
 }
 
 impl ArgumentType {
-    pub fn to_r(&self) -> String {
-        match &self.0 {
+    pub fn to_r(&self, context: &Context) -> String {
+        if self.3 {
+            return "...".to_string();
+        }
+        let name = match &self.0 {
             Type::Char(c, _) => match c {
                 Tchar::Val(x) => x.to_string(),
                 _ => "".to_string(),
             },
             t => t.to_string(),
+        };
+        match &self.4 {
+            Some(default) => format!("{} = {}", name, default.to_r(context).0),
+            None => name,
         }
     }
 
@@ -44,11 +68,50 @@ impl ArgumentType {
             Type::Char(name.to_string().into(), HelpData::default()),
             type_.clone(),
             false,
+            false,
+            None,
         )
+    }
+
+    pub fn is_variadic(&self) -> bool {
+        self.3
+    }
+
+    pub fn set_variadic(self, variadic: bool) -> Self {
+        ArgumentType(self.0, self.1, self.2, variadic, self.4)
+    }
+
+    pub fn has_default(&self) -> bool {
+        self.4.is_some()
+    }
+
+    pub fn get_default(&self) -> Option<&Lang> {
+        self.4.as_deref()
+    }
+
+    pub fn set_default(self, default: Option<Lang>) -> Self {
+        ArgumentType(self.0, self.1, self.2, self.3, default.map(Box::new))
     }
 
     pub fn get_type(&self) -> Type {
         self.1.clone()
+    }
+
+    /// Type of the parameter as seen inside the function body.
+    /// A variadic `...xs: T` collects its arguments into a vector at runtime,
+    /// so the body sees `[#N, T]` instead of `T`.
+    pub fn body_type(&self) -> Type {
+        if self.3 {
+            let h = self.1.get_help_data();
+            Type::Vec(
+                VecType::S3,
+                Box::new(Type::IndexGen("N".to_string(), h.clone())),
+                Box::new(self.1.clone()),
+                h,
+            )
+        } else {
+            self.1.clone()
+        }
     }
 
     pub fn get_argument(&self) -> Type {
@@ -62,13 +125,21 @@ impl ArgumentType {
                 _ => panic!("A parameter can't be an empty value"),
             },
             Type::LabelGen(l, _) => l.to_string().to_uppercase(),
-            Type::Multi(t, _) => ArgumentType(*t, self.1.clone(), false).get_argument_str(),
+            Type::Multi(t, _) => {
+                ArgumentType(*t, self.1.clone(), false, false, None).get_argument_str()
+            }
             _ => panic!("The argument wasn't a label"),
         }
     }
 
     pub fn remove_embeddings(&self) -> ArgumentType {
-        ArgumentType(self.0.clone(), self.1.clone(), false)
+        ArgumentType(
+            self.0.clone(),
+            self.1.clone(),
+            false,
+            self.3,
+            self.4.clone(),
+        )
     }
 
     pub fn is_embedded(&self) -> bool {
@@ -76,7 +147,7 @@ impl ArgumentType {
     }
 
     pub fn set_type(self, typ: Type) -> ArgumentType {
-        ArgumentType(self.0, typ, self.2)
+        ArgumentType(self.0, typ, self.2, self.3, self.4)
     }
 
     pub fn to_var(self, context: &Context) -> Var {
@@ -104,6 +175,10 @@ impl ArgumentType {
             .collect::<Vec<_>>()
             .join("; ")
     }
+
+    pub fn index_calculation(self) -> ArgumentType {
+        ArgumentType(self.0, self.1.index_calculation(), self.2, self.3, self.4)
+    }
 }
 
 impl fmt::Display for ArgumentType {
@@ -114,7 +189,13 @@ impl fmt::Display for ArgumentType {
 
 impl From<(String, Type)> for ArgumentType {
     fn from(val: (String, Type)) -> Self {
-        ArgumentType(Type::Char(val.0.into(), val.1.clone().into()), val.1, false)
+        ArgumentType(
+            Type::Char(val.0.into(), val.1.clone().into()),
+            val.1,
+            false,
+            false,
+            None,
+        )
     }
 }
 
@@ -124,6 +205,8 @@ impl From<(&str, Type)> for ArgumentType {
             Type::Char(val.0.to_string().into(), val.1.clone().into()),
             val.1,
             false,
+            false,
+            None,
         )
     }
 }
@@ -134,6 +217,8 @@ impl From<(Var, Type)> for ArgumentType {
             Type::Char(val.0.get_name().into(), val.1.clone().into()),
             val.1,
             false,
+            false,
+            None,
         )
     }
 }

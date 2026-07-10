@@ -4,7 +4,10 @@ use crate::components::r#type::argument_type::ArgumentType;
 use crate::components::r#type::type_operator::TypeOperator;
 use crate::components::r#type::type_system::TypeSystem;
 use crate::components::r#type::Type;
+use crate::processes::type_checking::type_arithmetic::norm_arithmetic;
+use crate::processes::type_checking::type_arithmetic::norm_intersection;
 use crate::processes::type_checking::unification::type_substitution;
+use crate::utils::builder;
 use rpds::Vector;
 
 pub fn reduce_param(
@@ -16,11 +19,17 @@ pub fn reduce_param(
 
     // Reduce the type part of each parameter
     let reduced_type = reduce_type_helper(context, &param.get_type(), memory);
-    ArgumentType(param.get_argument(), reduced_type, param.2.to_owned())
+    ArgumentType(
+        param.get_argument(),
+        reduced_type,
+        param.2.to_owned(),
+        param.3.to_owned(),
+        param.4.to_owned(),
+    )
 }
 
 fn is_in_memory(name: &str, memory: &Vector<String>) -> bool {
-    memory.iter().find(|&val| val == name).is_some()
+    memory.iter().any(|val| val == name)
 }
 
 pub fn reduce_type(context: &Context, type_: &Type) -> Type {
@@ -57,27 +66,28 @@ pub fn reduce_type_helper(context: &Context, type_: &Type, memory: Vector<String
         Type::Alias(name, concret_types, is_opaque, h) => {
             match (is_opaque, is_in_memory(name, &memory)) {
                 (true, _) | (_, true) => type_.clone(),
-                (false, _) => {
-                    match Var::from_type(type_.clone()) {
-                        Some(var) => {
-                            context
-                                .get_matching_alias_signature(&var)
-                                .map(|(aliased_type, generics)| {
-                                    reduce_alias(
-                                        aliased_type,
-                                        &generics,
-                                        concret_types,
-                                        name,
-                                        memory,
-                                        context,
-                                    )
-                                })
-                                // Return Any type instead of panicking if alias not found
-                                .unwrap_or_else(|| Type::Any(h.clone()))
-                        }
-                        None => Type::Any(h.clone()),
-                    }
-                }
+                (false, _) => match Var::from_type(type_.clone()) {
+                    Some(var) => context
+                        .get_matching_alias_signature(&var)
+                        .map(|(aliased_type, generics)| {
+                            reduce_alias(
+                                aliased_type,
+                                &generics,
+                                concret_types,
+                                name,
+                                memory,
+                                context,
+                            )
+                        })
+                        .unwrap_or_else(|| match name.as_str() {
+                            "Integer" => builder::integer_type_default(),
+                            "Character" => builder::character_type_default(),
+                            "Boolean" => builder::boolean_type(),
+                            "Number" => builder::number_type(),
+                            _ => Type::Any(h.clone()),
+                        }),
+                    None => Type::Any(h.clone()),
+                },
             }
         }
         Type::Tag(name, inner, h) => Type::Tag(
@@ -87,15 +97,18 @@ pub fn reduce_type_helper(context: &Context, type_: &Type, memory: Vector<String
         ),
         Type::If(typ, _conditions, _) => *typ.clone(),
         Type::Function(typs, ret_typ, h) => {
-            let typs2 = typs
+            let typs2: Vec<ArgumentType> = typs
                 .iter()
-                .map(|x| reduce_type_helper(context, x, memory.clone()))
-                .collect::<Vec<_>>();
+                .map(|arg| {
+                    let new_type = reduce_type_helper(context, &arg.get_type(), memory.clone());
+                    ArgumentType::new(&arg.get_argument_str(), &new_type)
+                })
+                .collect();
             let ret_typ2 = reduce_type_helper(context, ret_typ, memory.clone());
             Type::Function(typs2, Box::new(ret_typ2), h.to_owned())
         }
         Type::Vec(vtype, ind, typ, h) => Type::Vec(
-            *vtype,
+            vtype.clone(),
             ind.clone(),
             Box::new(reduce_type_helper(context, typ, memory.clone())),
             h.clone(),
@@ -111,18 +124,43 @@ pub fn reduce_type_helper(context: &Context, type_: &Type, memory: Vector<String
                 type_.clone()
             }
         }
+        Type::Operator(
+            op @ (TypeOperator::Addition
+            | TypeOperator::Substraction
+            | TypeOperator::Multiplication
+            | TypeOperator::Division),
+            t1,
+            t2,
+            h,
+        ) => {
+            let r1 = reduce_type_helper(context, t1, memory.clone());
+            let r2 = reduce_type_helper(context, t2, memory.clone());
+            norm_arithmetic(*op, r1, r2, h.clone())
+        }
+        Type::Operator(TypeOperator::Intersection, t1, t2, h) => {
+            let r1 = reduce_type_helper(context, t1, memory.clone());
+            let r2 = reduce_type_helper(context, t2, memory.clone());
+            norm_intersection(r1, r2, h.clone())
+        }
         Type::Operator(TypeOperator::Access, t1, t2, h) => {
             let t1_inner = (**t1).clone();
             let t2_inner = (**t2).clone();
-            match (t1_inner, t2_inner) {
-                (Type::Variable(module_name, _), Type::Alias(alias_name, _args, _opaque, _)) => {
-                    context
-                        .get_type_from_variable(&Var::from_name(&module_name))
-                        .ok()
-                        .and_then(|t| t.to_module_type().ok())
-                        .and_then(|module_type| module_type.get_type_from_name(&alias_name).ok())
-                        .unwrap_or_else(|| Type::Any(h.clone()))
-                }
+            let module_name = match &t1_inner {
+                Type::Variable(name, _) => Some(name.as_str()),
+                Type::Alias(name, _, _, _) => Some(name.as_str()),
+                _ => None,
+            };
+            let alias_name = match &t2_inner {
+                Type::Alias(name, _, _, _) => Some(name.as_str()),
+                _ => None,
+            };
+            match (module_name, alias_name) {
+                (Some(module_name), Some(alias_name)) => context
+                    .get_type_from_variable(&Var::from_name(module_name))
+                    .ok()
+                    .and_then(|t| t.to_module_type().ok())
+                    .and_then(|module_type| module_type.get_type_from_name(alias_name).ok())
+                    .unwrap_or_else(|| Type::Any(h.clone())),
                 _ => Type::Any(h.clone()),
             }
         }

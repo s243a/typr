@@ -1,98 +1,134 @@
-# TypR Issues for SciREPL Integration
+# TypR / SciREPL integration status
 
-Issues discovered while integrating TypR as a kernel in SciREPL.
-Each can be a separate PR to upstream (fabriceHategekimana/typr).
+Updated 2026-07-09 after refreshing from `we-data-ch/typr` at `5f8f2a9`.
 
-## PR 1: Expand R Standard Library (ready — on feat/expand-r-stdlib)
-**Status:** Merged to fork main, not yet PR'd upstream
+## Current integration baseline
 
-- `cat()` not in std library — most common R output function
-- `print()` only accepts `char`, not `int`/`num`
-- Missing: math functions (abs, sqrt, log, sin, cos, etc.)
-- Missing: vector ops (length, sort, unique, head, tail, etc.)
-- Missing: string ops (nchar, substr, gsub, trimws, etc.)
-- Missing: type checking (is.numeric, is.character, etc.)
-- Missing: functional (Map, Filter, Reduce, sapply, etc.)
-- Missing: comparison operators (==, !=, <, >, <=, >=)
-- Missing: control flow (ifelse, tryCatch, invisible, return)
+The fork had been based on `f4151f0` and was 109 upstream commits behind. The
+refresh branch `integrate/upstream-2026-07-07` starts at current upstream and
+ports only the sciREPL behavior that remains necessary.
 
-**Files changed:** `configs/std/std_R.ty`, `configs/std/default.ty`,
-`configs/std/io.ty`, `crates/typr-cli/src/standard_library.rs`
+Do not replay `0648c01` (the old standard-library expansion) verbatim. Upstream
+deleted the duplicate top-level `configs/std` tree and reorganized the active
+standard library under `crates/typr-cli/configs/std`. Its signatures should be
+re-audited against the current type system instead of resolving the deleted
+files back into existence.
 
-**Note:** `io.ty` is created but parser skips it — investigate why
-new .ty files aren't picked up even with identical syntax to std_R.ty.
+## Variadic function inputs: implemented upstream
 
-## PR 2: @{ }@ Raw-R Blocks in WASM Build
-**Status:** Not started — needs Rust work in typr-core/typr-wasm
+**Status:** Available upstream since commit `53e5f0d` (2026-05-25), and present
+in releases v0.5.3 and v0.5.6.
 
-The TypR CLI supports `@{ ... }@` for embedding raw R code that
-bypasses the type checker. The WASM build (`typr-wasm`) does not
-support this syntax — the parser throws an error.
+TypR now accepts a typed trailing variadic parameter:
 
-**Impact:** UnifyWeaver's TypR target generates code with `@{ }@`
-blocks for operations TypR can't express natively (environment
-manipulation, complex R closures). This code can't run in the
-browser via typr-wasm.
+```typr
+let total <- fn(...xs: num): num {
+    sum(xs)
+};
 
-**Proposed fix:** In `typr-wasm/src/lib.rs`, preprocess the source
-to extract `@{ ... }@` blocks before parsing, replace with
-placeholders, compile the TypR portions, then splice raw R back
-into the output.
+let collect <- fn(prefix: char, ...xs: char): [#N, char] {
+    xs
+};
 
-**Alternative:** Handle in typr-core's parser so both CLI and WASM
-benefit.
-
-## PR 3: Semicolon Requirement Documentation
-**Status:** Documentation only
-
-TypR requires semicolons at end of statements. This isn't obvious
-from the README. Without semicolons, multi-line code fails with
-confusing "type Empty doesn't match type any" errors.
-
-```
-let x <- 42     # fails
-let x <- 42;    # works
+let answer <- total(1.0, 2.0, 3.0);
 ```
 
-## PR 4: Function Body Braces Required
-**Status:** Documentation only
+The implementation:
 
-Single-expression function bodies without braces silently drop
-the body in the transpiled output:
+- parses `...name: T` only in trailing parameter position;
+- allows zero or more trailing arguments of type `T`;
+- exposes the parameter as a typed vector `[#N, T]` inside the function body;
+- emits native R `...` and collects it into `typed_vec(...)` for the body; and
+- supports fixed leading parameters followed by the variadic parameter.
 
-```
-let f <- function(x) x * x;    # transpiles to: function(x)  (no body!)
-let f <- function(x) { x * x };  # works correctly
-```
+Focused upstream coverage currently has seven passing variadic tests, including
+zero arguments, multiple arguments, fixed-plus-variadic parameters, and a type
+error for an incompatible trailing value.
 
-This is a transpiler bug, not just a syntax requirement.
+### Fork extensions: heterogeneous dots and forwarding
 
-## PR 5: Variadic Function Support
-**Status:** Not started — significant parser/type-checker work
+The refresh branch builds on the upstream homogeneous rest parameter with the
+R-facing cases needed by sciREPL:
 
-R functions like `cat()`, `paste()`, `print()` are variadic.
-TypR only supports fixed-arity function declarations. This forces
-workarounds like `cat(paste("x =", x))` instead of `cat("x =", x)`.
+```typr
+let capture <- fn(...args: Any): [#N, Any] {
+    args
+};
 
-**Workaround:** Use `paste()` to combine arguments before passing
-to single-arg functions.
+let forward <- fn(prefix: char, ...args: num): num {
+    destination(prefix, ...args)
+};
 
-## PR 6: Literal Type Inference
-**Status:** Investigation needed
-
-`42` is inferred as `any`, not `int`. `"hello"` is inferred as
-`any`, not `char`. This causes type annotation errors:
-
-```
-let x: int <- 42;  # Error: int doesn't match any
+let values <- capture(count = 1, label = "x", enabled = true);
 ```
 
-Works without annotation: `let x <- 42;` (inferred as `any`, used as `int` via operators).
+- `...Any` accepts heterogeneous named arguments. R names are retained by the
+  `typed_vec` collector.
+- `target(prefix, ...args)` forwards a collected vector, tuple, or record into
+  a trailing variadic parameter.
+- Forwarded packs must be trailing, and required fixed arguments must remain
+  explicit. Scalar spread sources and calls to non-variadic functions are
+  rejected by the type checker.
+- The R backend emits `do.call` with named list entries and uses
+  `typr_call_args` to recover the collected values and names.
+- Imported and `extern` calls use the same spread path; extern values are
+  converted with `to_native`.
 
-## Priority Order
-1. PR 1 (std library) — immediate usability impact, ready to submit
-2. PR 2 (@{ }@ WASM) — enables UnifyWeaver TypR target in browser
-3. PR 4 (function body bug) — silent data loss, should be high priority
-4. PR 3 (semicolons) — documentation
-5. PR 6 (literal inference) — type system improvement
-6. PR 5 (variadic) — significant feature work
+The active standard library now declares variadic `cat`, `print`, `paste`,
+`paste0`, `sprintf`, `message`, `warning`, and `c`. The generated
+`.std_r_typed.bin` is refreshed from the current configuration tree.
+
+No matching upstream issue or pull request was found under the terms `variadic`,
+`varargs`, `variable arguments`, or `dots`; the implementation landed directly
+in the commit history.
+
+## Arbitrary `@{ ... }@` raw-R blocks
+
+**Status:** Forward-ported on `integrate/upstream-2026-07-07`.
+
+Upstream already has a `VecBlock` AST node for `@{ ... }@`, so the fork-specific
+`RawRBlock` enum variant is no longer needed. The remaining sciREPL gaps were:
+
+- the parser only accepted a small expression subset inside the delimiters;
+- markers inside raw `function(...)` bodies leaked into emitted R.
+
+The forward port reuses `VecBlock`, captures arbitrary content up to `}@`, and
+strips delimiters from raw R function bodies during transpilation. It retains
+the upstream opaque `Empty` sentinel so a raw R result can flow into an explicitly
+typed sciREPL binding; using `Any` here is incorrect because TypR treats it as a
+top type rather than a dynamic value. Regression coverage includes a multi-line
+R closure using an environment and `$` field access, plus the exact typed alias
+assignment emitted by sciREPL.
+
+## Standard-library expansion
+
+**Status:** Reviewed subset ported to the active upstream layout.
+
+The old fork commit added useful typed declarations, but most edits targeted a
+configuration tree upstream has since removed. Some signatures were fixed-arity
+workarounds created before variadic support existed. Reintroducing those files
+would fight the upstream reorganization. This branch instead updates
+`crates/typr-cli/configs/std/std_R.ty` and regenerates the embedded binary.
+Declarations use `Any` for heterogeneous R dots and preserve the fixed leading
+argument for `print` and `sprintf`.
+
+## Other previously recorded issues
+
+- Semicolon diagnostics: re-test against the current parser and LSP.
+- Single-expression function bodies: re-test; upstream has substantially
+  refactored function parsing and now reports empty function bodies explicitly.
+- Literal type inference: re-test on v0.5.6 before carrying forward the old
+  report that literals became `Any`.
+
+## Validation notes
+
+- All 516 `typr-core` unit tests and all 31 snapshots pass. The deepest
+  upstream tests require a larger Rust test-thread stack; they also overflow on
+  pristine `5f8f2a9` with the default stack.
+- Twelve focused variadic tests pass, including heterogeneous named arguments,
+  forwarding, invalid scalar spreads, and active standard-library calls.
+- The arbitrary raw-R parser, transpiler, and typed-assignment regressions pass.
+- `cargo test -p typr-wasm` and the canonical release
+  `wasm-pack build --release --target web crates/typr-wasm` pass.
+- Focused UnifyWeaver tests for native `cat` and typed raw-R alias assignment
+  pass against the rebuilt CLI.

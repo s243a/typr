@@ -6,7 +6,6 @@
 # Dependency directories
 /vendor
 /cargo/
-Cargo.lock
 
 # IDE-specific files
 ## VSCode
@@ -78,3 +77,14 @@ lcov.info
 *.gcda
 
 /meta
+
+# Agent guidelines
+AGENTS.md
+CLAUDE.md
+
+# Documentation
+function_type_checking.md
+
+# Generated debug artifacts
+context.json
+problem/

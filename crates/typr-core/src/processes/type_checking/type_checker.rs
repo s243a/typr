@@ -1,6 +1,6 @@
-use crate::components::context::config::Environment;
 use crate::components::context::Context;
 use crate::components::language::Lang;
+use crate::components::r#type::clear_subtype_cache;
 use crate::components::r#type::type_system::TypeSystem;
 use crate::components::r#type::Type;
 use crate::processes::transpiling::translatable::RTranslatable;
@@ -30,7 +30,7 @@ impl TypeChecker {
     }
 
     pub fn has_errors(&self) -> bool {
-        self.errors.len() > 0
+        !self.errors.is_empty()
     }
 
     pub fn get_errors(&self) -> &Vec<TypRError> {
@@ -44,11 +44,12 @@ impl TypeChecker {
     }
 
     pub fn typing(self, exp: &Lang) -> Self {
+        clear_subtype_cache();
         let res = match exp {
-            Lang::Lines(exps, _) => {
-                let type_checker = exps
-                    .iter()
-                    .fold(self.clone(), |acc, lang| acc.typing_helper(lang));
+            Lang::Lines { value: exps, .. } => {
+                let type_checker = exps.iter().fold(self.clone(), |acc: TypeChecker, lang| {
+                    acc.typing_helper(lang)
+                });
                 eprintln!("Typing:\n{}\n", type_checker.last_type.pretty());
                 type_checker
             }
@@ -65,30 +66,49 @@ impl TypeChecker {
     /// Errors are collected and can be retrieved via `get_errors()`.
     /// The transpilation can still proceed even if there are type errors.
     pub fn typing_no_panic(self, exp: &Lang) -> Self {
+        clear_subtype_cache();
         match exp {
-            Lang::Lines(exps, _) => {
-                let type_checker = exps
-                    .iter()
-                    .fold(self.clone(), |acc, lang| acc.typing_helper(lang));
+            Lang::Lines { value: exps, .. } => {
+                let type_checker = exps.iter().fold(self.clone(), |acc: TypeChecker, lang| {
+                    acc.typing_helper(lang)
+                });
                 type_checker
             }
             _ => self.clone().typing_helper(exp),
         }
     }
 
+    pub fn typing_helper_pub(self, exp: &Lang) -> Self {
+        self.typing_helper(exp)
+    }
+
     fn typing_helper(self, exp: &Lang) -> Self {
         let (typ, lang, context, errors) = typing(&self.context, exp).to_tuple_with_errors();
+        let mut accumulated_errors = self.errors;
+        accumulated_errors.extend(errors);
         Self {
             context,
             code: self.code.push_back(lang),
             types: self.types.push_back(typ.clone()),
             last_type: typ,
-            errors: self.errors.iter().chain(errors.iter()).cloned().collect(),
+            errors: accumulated_errors,
         }
     }
 
     pub fn get_context(&self) -> Context {
         self.context.clone()
+    }
+
+    pub fn get_last_type(&self) -> Type {
+        self.last_type.clone()
+    }
+
+    pub fn get_types(&self) -> Vector<Type> {
+        self.types.clone()
+    }
+
+    pub fn get_code(&self) -> Vector<Lang> {
+        self.code.clone()
     }
 
     pub fn transpile(self) -> String {
@@ -99,17 +119,6 @@ impl TypeChecker {
             .map(|(lang, _)| lang.to_r(&self.context).0)
             .collect::<Vec<_>>()
             .join("\n");
-        let import = match self.get_environment() {
-            Environment::Project | Environment::Repl => "",
-            Environment::StandAlone => "source('a_std.R', echo = FALSE)",
-            // In WASM mode, no source() calls - files will be inlined by the compiler
-            Environment::Wasm => "",
-        };
-
-        format!("{}\n\n{}", import, code)
-    }
-
-    fn get_environment(&self) -> Environment {
-        self.context.get_environment()
+        format!("\n{}", code)
     }
 }

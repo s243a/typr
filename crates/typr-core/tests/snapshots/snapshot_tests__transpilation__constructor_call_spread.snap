@@ -1,0 +1,31 @@
+---
+source: crates/typr-core/tests/snapshot_tests.rs
+assertion_line: 134
+expression: r
+---
+Person <- function(age, name, .spread = NULL) {
+  explicit <- list()
+  if (!missing(age)) explicit[["age"]] <- age
+  if (!missing(name)) explicit[["name"]] <- name
+  x <- typr_spread_record(explicit, .spread)
+  as.Person(x)
+}
+as.Person <- function(x) {
+  if (!inherits(x, "Person")) class(x) <- c("Person", "list")
+  x <- validate_Person(x)
+  x <- validate(x)
+  x
+}
+validate_Person <- function(x) {
+  required_fields <- c("age", "name")
+  missing_fields <- setdiff(required_fields, names(x))
+  if (length(missing_fields) > 0) {
+    stop(paste0("Validation failed for type Person: missing fields: ", paste(missing_fields, collapse = ", ")))
+  }
+  if (!inherits(x[["age"]], "integer")) stop("Validation failed for type Person: field 'age' must be of class integer")
+  if (!inherits(x[["name"]], "character")) stop("Validation failed for type Person: field 'name' must be of class character")
+  x
+}
+`bob` <- Person(name = "Bob" |> as.Character(), age = 12L |> as.Integer())
+
+Person(name = "Alice" |> as.Character(), age = bob$age)

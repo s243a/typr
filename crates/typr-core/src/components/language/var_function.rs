@@ -25,9 +25,17 @@ impl TryFrom<Lang> for VarFunction {
 
     fn try_from(value: Lang) -> Result<Self, Self::Error> {
         match value {
-            Lang::Let(var, _, body, _) if body.is_function() => {
-                let var = Var::try_from(var).unwrap();
-                Ok(VarFunction(Vector::new().push_back((var, *body))))
+            Lang::Let {
+                variable,
+                r#type: _,
+                expression,
+                is_public: _,
+                is_testable: _,
+                is_export: _,
+                help_data: _,
+            } if expression.is_function() => {
+                let var = Var::try_from(variable).unwrap();
+                Ok(VarFunction(Vector::new().push_back((var, *expression))))
             }
             _ => Err("It's not a function declaration".to_string()),
         }

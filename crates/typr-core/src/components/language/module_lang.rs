@@ -28,7 +28,11 @@ impl ModuleLang {
             .flat_map(|arg| arg.clone().to_arg_value(type_module, context))
             .flatten()
             .collect::<Vec<_>>();
-        Lang::List(new_args, self.get_help_data())
+        Lang::List {
+            value: new_args,
+            spreads: Vec::new(),
+            help_data: self.get_help_data(),
+        }
     }
 
     pub fn get_help_data(&self) -> HelpData {
@@ -41,7 +45,13 @@ impl TryFrom<Lang> for ModuleLang {
 
     fn try_from(value: Lang) -> Result<Self, Self::Error> {
         match value {
-            Lang::Module(name, args, position, config, h) => Ok(ModuleLang {
+            Lang::Module {
+                name,
+                body: args,
+                module_position: position,
+                config,
+                help_data: h,
+            } => Ok(ModuleLang {
                 name,
                 members: args,
                 position,

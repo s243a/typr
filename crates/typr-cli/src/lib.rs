@@ -36,23 +36,21 @@
 pub use typr_core;
 
 // CLI modules
+pub mod cache;
+pub mod cases;
 pub mod cli;
 pub mod engine;
-pub mod fs_provider;
 pub mod io;
-pub mod lsp;
-pub mod lsp_parser;
 pub mod metaprogramming;
+pub mod progress;
 pub mod project;
+pub mod rd_renderer;
 pub mod repl;
 pub mod standard_library;
+pub mod vignette_renderer;
 
 // Re-export commonly used items
 pub use cli::start;
-pub use fs_provider::{FileSystemOutputHandler, FileSystemSourceProvider, NativePackageChecker};
 
 // Re-export typr-core abstractions
-pub use typr_core::{
-    CompileError, CompileOutput, Compiler, InMemoryOutputHandler, InMemorySourceProvider,
-    OutputHandler, PackageChecker, SourceProvider, StubPackageChecker, TranspileResult,
-};
+pub use typr_core::{Compiler, InMemorySourceProvider, SourceProvider, TranspileResult};

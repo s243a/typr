@@ -182,7 +182,7 @@ impl RHighlighter {
             }
 
             // Handle numbers
-            if ch.is_numeric() || (ch == '.' && chars.peek().map_or(false, |c| c.is_numeric())) {
+            if ch.is_numeric() || (ch == '.' && chars.peek().is_some_and(|c| c.is_numeric())) {
                 if !current_word.is_empty() {
                     result.push_str(&Self::colorize_word(&current_word));
                     current_word.clear();
@@ -464,10 +464,7 @@ impl TypRExecutor {
     fn get_r_code(self, cmd: &str) -> (Self, String, String) {
         let (r_code, api) = self.api.push(cmd).run().next_r_code().unwrap();
         let r_type = api.get_last_type().pretty2();
-        let res = Self {
-            api: api.clone(),
-            ..self
-        };
+        let res = Self { api: api.clone() };
         let saved_code = format!("{}\n{}", api.get_saved_r_code(), r_code);
         (res, saved_code, r_type)
     }
@@ -479,14 +476,15 @@ impl TypRExecutor {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(r_file_name)
             .unwrap();
-        let _ = file.write_all("source('a_std.R')\n".as_bytes());
+        let _ = file.write_all("source('std.R')\n".as_bytes());
         write_header(context, &dir, Environment::Repl);
         write_to_r_lang(r_code.to_string(), &dir, r_file_name, Environment::Repl);
         println!("{}{}{}", colors::NUMBER, r_type, colors::RESET);
-        let res = execute_r_with_path2(&dir, r_file_name);
-        res
+
+        execute_r_with_path2(&dir, r_file_name)
     }
 
     fn execute(self, cmd: &str) -> Result<(Self, ExecutionResult), String> {

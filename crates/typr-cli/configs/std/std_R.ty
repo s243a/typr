@@ -11,9 +11,26 @@
 @`+`: (Vec[#M, T], Vec[#M, T]) -> Vec[#M, T];
 @as__character: (Any) -> char;
 @source: (char) -> Empty;
-@reduce: ([#N, T], (T, U) -> T) -> T;
+@reduce: ([#N, T], (T, T) -> T) -> T;
+@fold: ([#N, T], U, (U, T) -> U) -> U;
+@extend: ([#N, T], T) -> [#N, T];
 @sum: ([#N, T]) -> T;
 @test_that: (char, Any) -> Empty;
 @expect_true: (bool) -> Empty;
 @expect_false: (T, T) -> Empty;
 @expect_equal: (T, T) -> Empty;
+# Variadic base-R calls. Any preserves heterogeneous named dots.
+@cat: (...Any) -> Empty;
+@print: (Any, ...Any) -> Empty;
+@paste: (...Any) -> char;
+@paste0: (...Any) -> char;
+@sprintf: (char, ...Any) -> char;
+@message: (...Any) -> Empty;
+@warning: (...Any) -> Empty;
+@c: (...T) -> [#N, T];
+@to_native: (T) -> T;
+@from_native: (Any, char) -> Any;
+@from_int: (Any) -> int;
+@from_num: (Any) -> num;
+@from_char: (Any) -> char;
+@from_bool: (Any) -> bool;

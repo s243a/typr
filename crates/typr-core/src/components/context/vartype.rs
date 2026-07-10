@@ -5,32 +5,47 @@
     unreachable_code,
     unused_assignments
 )]
-use crate::components::context::config::TargetLanguage;
-use crate::components::r#type::type_system::TypeSystem;
-use crate::processes::parsing::type_token::TypeToken;
-use crate::components::r#type::vector_type::VecType;
-use crate::components::r#type::alias_type::Alias;
 use crate::components::context::config::Config;
-use crate::components::language::var::Var;
+use crate::components::context::config::TargetLanguage;
 use crate::components::context::Context;
+use crate::components::language::var::Var;
 use crate::components::language::Lang;
-use serde::{Deserialize, Serialize};
+use crate::components::r#type::alias_type::Alias;
+use crate::components::r#type::type_category::TypeCategory;
+use crate::components::r#type::type_system::TypeSystem;
+use crate::components::r#type::vector_type::VecType;
 use crate::components::r#type::Type;
+use crate::processes::parsing::type_token::TypeToken;
 use crate::utils::builder;
+use countmap::CountMap;
 use indexmap::IndexSet;
-use std::iter::Rev;
+use serde::{Deserialize, Serialize};
+
 use std::ops::Add;
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Read;
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
 
 pub fn same_var_type(element1: &(Var, Type), element2: &(Var, Type)) -> bool {
     (element1.0.get_name() == element2.0.get_name())
         && (element1.0.get_type() == element2.0.get_type())
+}
+
+/// True for names shaped like the ones `push_alias_increment` generates:
+/// a `TypeCategory` display prefix followed by a counter (`Array0`,
+/// `Record2`, `Function15`, …). Used to tell auto-registered structural
+/// types apart from user-declared aliases when hoisting out of an inner
+/// scope. A user alias that happens to match (`Vec2`) is also hoisted —
+/// harmless, it only widens where that name resolves.
+pub fn is_generated_alias_name(name: &str) -> bool {
+    let prefix = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    prefix.len() < name.len()
+        && !prefix.is_empty()
+        && prefix.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 pub fn merge_variables(
@@ -73,11 +88,19 @@ pub fn merge_variables(
     result
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VarType {
     pub variables: IndexSet<(Var, Type)>,
     pub aliases: IndexSet<(Var, Type)>,
     pub std: IndexSet<(Var, Type)>,
+    #[serde(skip)]
+    pub alias_counter: CountMap<TypeCategory, usize>,
+}
+
+impl PartialEq for VarType {
+    fn eq(&self, other: &Self) -> bool {
+        self.variables == other.variables && self.aliases == other.aliases && self.std == other.std
+    }
 }
 
 //main
@@ -91,6 +114,7 @@ impl VarType {
             variables: IndexSet::new(),
             aliases,
             std: IndexSet::new(),
+            alias_counter: CountMap::new(),
         }
     }
 
@@ -103,12 +127,13 @@ impl VarType {
     ) -> VarType {
         match typ {
             Type::Interface(args, _) => {
-                let alias = original_type
-                    .clone()
-                    .to_alias(context)
-                    .unwrap_or_default()
-                    .set_opacity(false)
-                    .to_type();
+                let alias = match original_type.clone() {
+                    Type::Alias(name, params, _, h) => {
+                        Alias::new(format!("{}_", name), params, true, h).to_type()
+                    }
+                    Type::Interface(_, _) => Alias::default().set_opacity(true).to_type(),
+                    _ => Alias::default().set_opacity(true).to_type(),
+                };
                 args.iter()
                     .map(|arg_typ| {
                         (
@@ -134,12 +159,12 @@ impl VarType {
         }
     }
 
-    pub fn variables(&self) -> Rev<std::vec::IntoIter<&(Var, Type)>> {
-        self.variables.iter().collect::<Vec<_>>().into_iter().rev()
+    pub fn variables(&self) -> impl Iterator<Item = &(Var, Type)> + '_ {
+        self.variables.iter().rev()
     }
 
-    pub fn aliases(&self) -> Rev<std::vec::IntoIter<&(Var, Type)>> {
-        self.aliases.iter().collect::<Vec<_>>().into_iter().rev()
+    pub fn aliases(&self) -> impl Iterator<Item = &(Var, Type)> + '_ {
+        self.aliases.iter().rev()
     }
 
     pub fn get_types(&self) -> IndexSet<Type> {
@@ -162,19 +187,25 @@ impl VarType {
         self.replace_or_push_variables(var).push_aliases(&ali)
     }
 
-    pub fn push_alias_increment(self, vt: (Var, Type)) -> Self {
-        let name = vt.0.get_name();
-        match &name[..] {
-            "Generic" | "character" | "integer" | "Alias" | "Any" | "Rfunction" => self.clone(),
+    pub fn push_alias_increment(self, vt: (TypeCategory, Type)) -> Self {
+        let (category, typ) = vt;
+        match category {
+            TypeCategory::Generic
+            | TypeCategory::GenericKinded(_)
+            | TypeCategory::Char
+            | TypeCategory::Integer
+            | TypeCategory::Alias
+            | TypeCategory::Any
+            | TypeCategory::RFunction => self,
             _ => {
-                let var = self
-                    .aliases
-                    .iter()
-                    .find(|(var, _)| var.contains(&name))
-                    .map(|(var, _)| var.get_digit(&name) + 1)
-                    .map(|x| vt.0.clone().add_digit(x))
-                    .unwrap_or(vt.0.add_digit(0));
-                self.push_aliases(&[(var, vt.1)])
+                let count = self.alias_counter.get_count(&category).unwrap_or(0);
+                let name = format!("{}{}", category, count);
+                let var = Var::from_name(&name).set_type(builder::params_type());
+                let mut new_counter = self.alias_counter.clone();
+                new_counter.insert_or_increment(category);
+                let mut result = self;
+                result.alias_counter = new_counter;
+                result.push_aliases(&[(var, typ)])
             }
         }
     }
@@ -185,8 +216,7 @@ impl VarType {
 
     fn push_type_if_not_exists(self, typ: Type) -> Self {
         if !self.exists(&typ) {
-            self.clone()
-                .push_alias_increment((typ.to_category().to_variable(), typ))
+            self.clone().push_alias_increment((typ.to_category(), typ))
         } else {
             self
         }
@@ -196,6 +226,35 @@ impl VarType {
         types.iter().fold(self, |vartyp, typ| {
             vartyp.push_type_if_not_exists(typ.clone())
         })
+    }
+
+    /// Carries auto-generated structural type registrations (`Array0`,
+    /// `Record2`, `Function5`, … — created by `push_alias_increment` for
+    /// anonymous array/record/function types, e.g. from an inline
+    /// `expr as! [T]` cast or a signature's parameter type) made in an inner
+    /// scope (function body, module body) back into this outer context. The
+    /// transpiler resolves them here to emit `|> as.ArrayN()` annotations,
+    /// S3 method suffixes and the `types.R` entries — R's S3 class registry
+    /// is whole-program, so these must not stay scoped. The inner alias
+    /// counter is adopted too (it only ever advances) so later registrations
+    /// can't reuse a hoisted name for a different type. User-declared aliases
+    /// and variables stay scoped to the inner context.
+    pub fn hoist_aliases(self, inner: &VarType) -> Self {
+        let new_aliases = self.hoisted_alias_pairs(inner);
+        let mut result = self.push_aliases(&new_aliases);
+        result.alias_counter = inner.alias_counter.clone();
+        result
+    }
+
+    /// The alias pairs `hoist_aliases` would carry over from `inner`.
+    pub fn hoisted_alias_pairs(&self, inner: &VarType) -> Vec<(Var, Type)> {
+        inner
+            .aliases
+            .iter()
+            .filter(|pair| !self.aliases.contains(*pair))
+            .filter(|(var, _)| is_generated_alias_name(&var.get_name()))
+            .cloned()
+            .collect()
     }
 
     pub fn separate_variables_aliases(
@@ -250,48 +309,48 @@ impl VarType {
         let res = match t {
             Type::Integer(_, _) => "integer".to_string(),
             Type::Char(_, _) => "character".to_string(),
-            Type::Boolean(_) => "logical".to_string(),
-            Type::Number(_) => "numeric".to_string(),
+            Type::Boolean(_, _) => "logical".to_string(),
+            Type::Number(_, _) => "numeric".to_string(),
             Type::Any(_) => "Any".to_string(),
+            // Unresolved type variables (`T`, `%T`, `#N`, `$L`, …) have no
+            // fixed runtime class. R's `UseMethod` always falls back to
+            // `<generic>.default` when no more specific class matches, so
+            // that's the only suffix that actually dispatches at runtime —
+            // unlike a literal `"Generic"` class, which no constructed value
+            // (record types in particular) ever carries in its class chain.
             _ => self
                 .aliases
                 .iter()
                 .find(|(_, typ)| typ == t)
                 .map(|(var, _)| var.get_name())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "{} has no class equivalent:\n {:?}",
-                        t.pretty(),
-                        self.aliases
-                    )
-                }),
+                .unwrap_or("default".to_string()),
         };
         "'".to_string() + &res + "'"
     }
 
     pub fn get_type_anotation(&self, t: &Type) -> String {
         let res = match t {
-            Type::Boolean(_) => "Boolean".to_string(),
-            Type::Integer(_, _) => "Integer".to_string(),
-            Type::Number(_) => "Number".to_string(),
-            Type::Char(_, _) => "Character".to_string(),
+            Type::Boolean(_, _) => "as.Boolean".to_string(),
+            Type::Integer(_, _) => "as.Integer".to_string(),
+            Type::Number(_, _) => "as.Number".to_string(),
+            Type::Char(_, _) => "as.Character".to_string(),
             Type::Vec(vtype, _, _, _) if vtype.is_vector() => "".to_string(),
-            Type::Alias(name, _, _, _) => name.to_string(),
+            Type::Alias(name, _, _, _) => format!("as.{}", name),
             _ => self
                 .aliases
                 .iter()
                 .find(|(_, typ)| typ == t)
-                .map(|(var, _)| var.get_name())
-                .unwrap_or("Generic".to_string()),
+                .map(|(var, _)| format!("as.{}", var.get_name()))
+                .unwrap_or("as.Generic".to_string()),
         };
         format!("{}()", res)
     }
 
     pub fn get_type_anotation_no_parentheses(&self, t: &Type) -> String {
         match t {
-            Type::Boolean(_) => "logical".to_string(),
+            Type::Boolean(_, _) => "logical".to_string(),
             Type::Integer(_, _) => "integer".to_string(),
-            Type::Number(_) => "number".to_string(),
+            Type::Number(_, _) => "number".to_string(),
             Type::Char(_, _) => "character".to_string(),
             Type::Alias(name, _, _, _) => name.to_string(),
             _ => self
@@ -307,14 +366,17 @@ impl VarType {
         match t {
             Type::Integer(_, _) => "integer".to_string(),
             Type::Char(_, _) => "character".to_string(),
-            Type::Boolean(_) => "logical".to_string(),
-            Type::Number(_) => "numeric".to_string(),
+            Type::Boolean(_, _) => "logical".to_string(),
+            Type::Number(_, _) => "numeric".to_string(),
+            Type::Any(_) => "Any".to_string(),
+            // Same rationale as `get_class`'s fallback above: "default" is
+            // the only suffix `UseMethod` actually finds for these.
             _ => self
                 .aliases
                 .iter()
                 .find(|(_, typ)| typ == t)
                 .map(|(var, _)| var.get_name())
-                .unwrap_or(t.pretty()),
+                .unwrap_or("default".to_string()),
         }
     }
 
@@ -371,14 +433,10 @@ impl VarType {
             .join("\n")
     }
 
-    pub fn print_aliases(&self) {
-        eprintln!("{}", self.get_aliases());
-    }
-
-    pub fn variable_exist(&self, var: Var) -> Option<Var> {
+    pub fn variable_exist(&self, var: Var, context: &Context) -> Option<Var> {
         self.variables
             .iter()
-            .find(|(v, _)| v.match_with(&var, &Context::default()))
+            .find(|(v, _)| v.match_with(&var, context))
             .map(|(v, _)| v.clone())
     }
 
@@ -469,7 +527,7 @@ impl VarType {
     }
 
     /// Save to a file (only available in native mode)
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn save(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let binary_data = bincode::serialize(self)?;
         let mut file = File::create(path)?;
@@ -478,13 +536,13 @@ impl VarType {
     }
 
     /// Stub for WASM mode
-    #[cfg(feature = "wasm")]
+    #[cfg(target_arch = "wasm32")]
     pub fn save(&self, _path: &str) -> Result<(), Box<dyn std::error::Error>> {
         Err("File saving not supported in WASM mode".into())
     }
 
     /// Load from a file path (only available in native mode)
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load(self, path: &str) -> Result<VarType, Box<dyn std::error::Error>> {
         let mut file = File::open(path)?;
         let mut buffer = Vec::new();
@@ -494,7 +552,7 @@ impl VarType {
     }
 
     /// Stub for WASM mode
-    #[cfg(feature = "wasm")]
+    #[cfg(target_arch = "wasm32")]
     pub fn load(self, _path: &str) -> Result<VarType, Box<dyn std::error::Error>> {
         Err("File loading not supported in WASM mode".into())
     }
@@ -528,7 +586,7 @@ impl VarType {
     }
 
     /// Load from file (only available in native mode)
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn from_file(path: &str) -> Result<VarType, Box<dyn std::error::Error>> {
         let mut file = File::open(path)?;
         let mut buffer = Vec::new();
@@ -538,7 +596,7 @@ impl VarType {
     }
 
     /// Stub for WASM mode
-    #[cfg(feature = "wasm")]
+    #[cfg(target_arch = "wasm32")]
     pub fn from_file(_path: &str) -> Result<VarType, Box<dyn std::error::Error>> {
         Err("File loading not supported in WASM mode".into())
     }
@@ -567,6 +625,7 @@ impl From<Vec<(Var, Type)>> for VarType {
             variables,
             aliases,
             std: IndexSet::new(),
+            alias_counter: CountMap::new(),
         }
     }
 }
@@ -575,10 +634,24 @@ impl Add for VarType {
     type Output = Self;
 
     fn add(self, other: Self) -> Self {
+        use std::collections::hash_map::Entry;
+        use std::collections::HashMap;
+
+        let mut counter: HashMap<TypeCategory, usize> = self.alias_counter.into_iter().collect();
+        for (cat, count) in other.alias_counter.into_iter() {
+            match counter.entry(cat) {
+                Entry::Occupied(mut e) => *e.get_mut() += count,
+                Entry::Vacant(e) => {
+                    e.insert(count);
+                }
+            }
+        }
+        let alias_counter: CountMap<TypeCategory, usize> = counter.into_iter().collect();
         Self {
             variables: self.variables.union(&other.variables).cloned().collect(),
             aliases: self.aliases.union(&other.aliases).cloned().collect(),
             std: self.std.union(&other.std).cloned().collect(),
+            alias_counter,
         }
     }
 }

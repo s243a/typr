@@ -1,8 +1,31 @@
 use crate::components::context::Context;
 use crate::components::r#type::argument_type::ArgumentType;
+use crate::components::r#type::type_operator::TypeOperator;
 use crate::components::r#type::Type;
 use crate::processes::type_checking::type_comparison;
 use std::collections::HashSet;
+
+/// Compare two index/label keys by *name*.
+///
+/// `Type`'s `PartialEq` treats every `IndexGen`/`LabelGen` as equal regardless
+/// of its name (e.g. `IndexGen("I") == IndexGen("J")`). That is fine for
+/// structural subtyping but disastrous for substitution-map lookups: it makes
+/// every index variable resolve to the *first* binding in the map. Index/label
+/// lookups must therefore match on the variable name so that, for example,
+/// `[#J-#I/#K, int]` with `{I→1, J→20, K→1}` resolves correctly.
+///
+/// NB: `Generic` is intentionally *not* handled here. Several inference paths
+/// (notably untyped-lambda return-type inference) still rely on the loose
+/// `Generic` equality, so reworking it is out of scope for this fix.
+pub fn same_generic_key(key: &Type, var: &Type) -> bool {
+    match (key, var) {
+        (Type::Generic(a, _), Type::Generic(b, _)) => a == b,
+        (Type::IndexGen(a, _), Type::IndexGen(b, _)) => a == b,
+        (Type::LabelGen(a, _), Type::LabelGen(b, _)) => a == b,
+        (Type::KindedGen(k1, a, _), Type::KindedGen(k2, b, _)) => k1 == k2 && a == b,
+        _ => false,
+    }
+}
 
 pub fn type_substitution(type_: &Type, substitutions: &[(Type, Type)]) -> Type {
     if substitutions.is_empty() {
@@ -22,10 +45,10 @@ pub fn type_substitution(type_: &Type, substitutions: &[(Type, Type)]) -> Type {
         }
 
         // Index generic substitution
-        Type::IndexGen(name, h) => {
+        Type::IndexGen(_, _) => {
             if let Some((_, replacement)) = substitutions
                 .iter()
-                .find(|(idx_name, _)| idx_name == &Type::IndexGen(name.clone(), h.clone()))
+                .find(|(idx_name, _)| same_generic_key(idx_name, type_))
             {
                 replacement.clone()
             } else {
@@ -34,10 +57,22 @@ pub fn type_substitution(type_: &Type, substitutions: &[(Type, Type)]) -> Type {
         }
 
         // Label generic substitution
-        Type::LabelGen(name, h) => {
+        Type::LabelGen(_, _) => {
             if let Some((_, replacement)) = substitutions
                 .iter()
-                .find(|(idx_name, _)| idx_name == &Type::LabelGen(name.clone(), h.clone()))
+                .find(|(idx_name, _)| same_generic_key(idx_name, type_))
+            {
+                replacement.clone()
+            } else {
+                type_.clone()
+            }
+        }
+
+        // Kinded generic substitution
+        Type::KindedGen(_, _, _) => {
+            if let Some((_, replacement)) = substitutions
+                .iter()
+                .find(|(key, _)| same_generic_key(key, type_))
             {
                 replacement.clone()
             } else {
@@ -46,49 +81,69 @@ pub fn type_substitution(type_: &Type, substitutions: &[(Type, Type)]) -> Type {
         }
 
         // Arithmetic operations
-        Type::Add(t1, t2, h) => {
+        Type::Operator(TypeOperator::Addition, t1, t2, h) => {
             let v1 = type_substitution(t1, substitutions);
             let v2 = type_substitution(t2, substitutions);
             match (v1.clone(), v2.clone()) {
-                (Type::Number(h), Type::Number(_)) => Type::Number(h),
+                (Type::Number(n, h), Type::Number(_, _)) => Type::Number(n, h),
                 (Type::Integer(i1, h), Type::Integer(i2, _)) => Type::Integer(i1 + i2, h),
-                _ => Type::Add(Box::new(v1), Box::new(v2), h.clone()),
+                _ => Type::Operator(
+                    TypeOperator::Addition,
+                    Box::new(v1),
+                    Box::new(v2),
+                    h.clone(),
+                ),
             }
         }
 
-        Type::Minus(t1, t2, h) => {
+        Type::Operator(TypeOperator::Substraction, t1, t2, h) => {
             let v1 = type_substitution(t1, substitutions);
             let v2 = type_substitution(t2, substitutions);
             match (v1.clone(), v2.clone()) {
-                (Type::Number(h), Type::Number(_)) => Type::Number(h),
+                (Type::Number(n, h), Type::Number(_, _)) => Type::Number(n, h),
                 (Type::Integer(i1, h), Type::Integer(i2, _)) => Type::Integer(i1 - i2, h),
-                _ => Type::Minus(Box::new(v1), Box::new(v2), h.clone()),
+                _ => Type::Operator(
+                    TypeOperator::Substraction,
+                    Box::new(v1),
+                    Box::new(v2),
+                    h.clone(),
+                ),
             }
         }
 
-        Type::Mul(t1, t2, h) => {
+        Type::Operator(TypeOperator::Multiplication, t1, t2, h) => {
             let v1 = type_substitution(t1, substitutions);
             let v2 = type_substitution(t2, substitutions);
             match (v1.clone(), v2.clone()) {
-                (Type::Number(h), Type::Number(_)) => Type::Number(h),
+                (Type::Number(n, h), Type::Number(_, _)) => Type::Number(n, h),
                 (Type::Integer(i1, h), Type::Integer(i2, _)) => Type::Integer(i1 * i2, h),
-                _ => Type::Mul(Box::new(v1), Box::new(v2), h.clone()),
+                _ => Type::Operator(
+                    TypeOperator::Multiplication,
+                    Box::new(v1),
+                    Box::new(v2),
+                    h.clone(),
+                ),
             }
         }
 
-        Type::Div(t1, t2, h) => {
+        Type::Operator(TypeOperator::Division, t1, t2, h) => {
             let v1 = type_substitution(t1, substitutions);
             let v2 = type_substitution(t2, substitutions);
             match (v1.clone(), v2.clone()) {
-                (Type::Number(h), Type::Number(_)) => Type::Number(h),
+                (Type::Number(n, h), Type::Number(_, _)) => Type::Number(n, h),
                 (Type::Integer(i1, h), Type::Integer(i2, _)) => Type::Integer(i1 / i2, h),
-                _ => Type::Div(Box::new(v1), Box::new(v2), h.clone()),
+                _ => Type::Operator(
+                    TypeOperator::Division,
+                    Box::new(v1),
+                    Box::new(v2),
+                    h.clone(),
+                ),
             }
         }
 
         // Array type substitution
         Type::Vec(vtype, size, element_type, h) => Type::Vec(
-            *vtype,
+            vtype.clone(),
             Box::new(type_substitution(size, substitutions)),
             Box::new(type_substitution(element_type, substitutions)),
             h.clone(),
@@ -103,6 +158,8 @@ pub fn type_substitution(type_: &Type, substitutions: &[(Type, Type)]) -> Type {
                         arg_type.0.clone(),
                         type_substitution(&arg_type.1, substitutions),
                         arg_type.2,
+                        arg_type.3,
+                        arg_type.4.clone(),
                     )
                 })
                 .collect(),
@@ -113,7 +170,10 @@ pub fn type_substitution(type_: &Type, substitutions: &[(Type, Type)]) -> Type {
         Type::Function(params, return_type, h) => Type::Function(
             params
                 .iter()
-                .map(|param| type_substitution(param, substitutions))
+                .map(|arg| {
+                    let new_type = type_substitution(&arg.get_type(), substitutions);
+                    ArgumentType::new(&arg.get_argument_str(), &new_type)
+                })
                 .collect(),
             Box::new(type_substitution(return_type, substitutions)),
             h.clone(),
@@ -126,7 +186,7 @@ pub fn type_substitution(type_: &Type, substitutions: &[(Type, Type)]) -> Type {
                 .iter()
                 .map(|param| type_substitution(param, substitutions))
                 .collect(),
-            opacity.clone(),
+            *opacity,
             h.clone(),
         ),
 
@@ -136,6 +196,15 @@ pub fn type_substitution(type_: &Type, substitutions: &[(Type, Type)]) -> Type {
             Box::new(type_substitution(inner_type, substitutions)),
             h.clone(),
         ),
+
+        // Operator type substitution (e.g. union types like .Some(T) | .None)
+        Type::Operator(op, t1, t2, h) => Type::Operator(
+            *op,
+            Box::new(type_substitution(t1, substitutions)),
+            Box::new(type_substitution(t2, substitutions)),
+            h.clone(),
+        ),
+
         // Default case: return the type unchanged
         _ => type_.clone(),
     }
@@ -163,6 +232,7 @@ fn match_wildcard(fields: &HashSet<ArgumentType>, arg_type: ArgumentType) -> Vec
 
 // Add these new functions to the previous implementation
 
+#[allow(clippy::only_used_in_recursion)]
 fn unification_helper(values: &[Type], type1: &Type, type2: &Type) -> Vec<(Type, Type)> {
     match (type1, type2) {
         // Direct equality case
@@ -193,6 +263,38 @@ fn unification_helper(values: &[Type], type1: &Type, type2: &Type) -> Vec<(Type,
             )]
         }
 
+        // Kinded generic case with a concrete type: only bind if the
+        // concrete type's kind matches the sigil (RFC sigils.md §4.3). On
+        // mismatch, produce no binding so unification fails for this slot;
+        // not-yet-resolvable shapes (Function, Tuple, Alias, ...) are
+        // permissively accepted, matching `accepts_number_kind`'s philosophy.
+        (concrete, Type::KindedGen(k, g, h2)) | (Type::KindedGen(k, g, h2), concrete)
+            if !matches!(
+                concrete,
+                Type::Generic(_, _)
+                    | Type::IndexGen(_, _)
+                    | Type::LabelGen(_, _)
+                    | Type::KindedGen(_, _, _)
+                    | Type::Any(_)
+            ) =>
+        {
+            // Number/Integer are definitely not any of the four `Kind`
+            // variants (Number isn't a `Kind` value — see kind.rs), so they
+            // must be rejected explicitly rather than falling through
+            // `type_kind`'s permissive `None` case.
+            if matches!(concrete, Type::Number(_, _) | Type::Integer(_, _)) {
+                vec![]
+            } else {
+                match crate::components::r#type::kind::type_kind(concrete) {
+                    Some(actual) if actual == *k => {
+                        vec![(Type::KindedGen(*k, g.clone(), h2.clone()), concrete.clone())]
+                    }
+                    Some(_) => vec![],
+                    None => vec![(Type::KindedGen(*k, g.clone(), h2.clone()), concrete.clone())],
+                }
+            }
+        }
+
         // Function case
         (Type::Function(params1, ret1, _), Type::Function(params2, ret2, _)) => {
             if params1.len() != params2.len() {
@@ -202,9 +304,9 @@ fn unification_helper(values: &[Type], type1: &Type, type2: &Type) -> Vec<(Type,
             // Unify return types
             let mut matches = unification_helper(values, ret1, ret2);
 
-            // Unify parameters
+            // Unify parameters (extract the actual Type from ArgumentType)
             for (p1, p2) in params1.iter().zip(params2.iter()) {
-                let param_matches = unification_helper(values, p1, p2);
+                let param_matches = unification_helper(values, &p1.get_type(), &p2.get_type());
                 merge_substitutions(&mut matches, param_matches);
             }
 
@@ -253,19 +355,57 @@ pub fn unify(cont: &Context, type1: &Type, type2: &Type) -> Vec<(Type, Type)> {
     let new_type1 = type_comparison::reduce_type(cont, type1);
     let new_type2 = type_comparison::reduce_type(cont, type2);
     // try unification helper
-    unification_helper(&vec![], &new_type1, &new_type2)
+    unification_helper(&[], &new_type1, &new_type2)
 }
 
 // Helper functions needed for unification
 
-fn merge_substitutions(existing: &mut Vec<(Type, Type)>, new: Vec<(Type, Type)>) {
-    for (name, type_) in new {
-        if let Some(pos) = existing.iter().position(|(n, _)| n == &name) {
-            existing[pos] = (name, type_);
-        } else {
-            existing.push((name, type_));
+fn resolve_in_chain(existing: &[(Type, Type)], typ: &Type) -> Type {
+    let mut current = typ.clone();
+    let mut seen = HashSet::new();
+    loop {
+        let found = existing.iter().find(|(k, _)| *k == current);
+        match found {
+            Some((_, next)) => {
+                if *next == current || !seen.insert(current.clone()) {
+                    break;
+                }
+                current = (*next).clone();
+            }
+            None => break,
         }
     }
+    current
+}
+
+fn transitive_closure(existing: &mut [(Type, Type)]) {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut i = 0;
+        while i < existing.len() {
+            let resolved = resolve_in_chain(existing, &existing[i].1);
+            if resolved != existing[i].1 {
+                existing[i].1 = resolved;
+                changed = true;
+            }
+            i += 1;
+        }
+    }
+}
+
+fn merge_substitutions(existing: &mut Vec<(Type, Type)>, new: Vec<(Type, Type)>) {
+    for (name, type_) in new {
+        let resolved_type = resolve_in_chain(existing, &type_);
+        if let Some(pos) = existing.iter().position(|(n, _)| n == &name) {
+            if resolved_type != existing[pos].1 {
+                existing[pos] = (name, resolved_type);
+            }
+        } else {
+            existing.push((name, resolved_type));
+        }
+    }
+    transitive_closure(existing);
 }
 
 pub fn record_intersection(
@@ -309,17 +449,41 @@ pub fn record_intersection(
     }
 
     // Merge labels with their respective values
-    let intersection1 = common_labels
-        .iter()
-        .zip(values1.into_iter())
-        .map(|(_label, value)| value)
-        .collect();
+    let intersection1 = values1.into_iter().collect();
 
-    let intersection2 = common_labels
-        .iter()
-        .zip(values2.into_iter())
-        .map(|(_label, value)| value)
-        .collect();
+    let intersection2 = values2.into_iter().collect();
 
     Some((intersection1, intersection2))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::error_message::help_data::HelpData;
+    use crate::components::r#type::kind::Kind;
+    use crate::utils::builder;
+
+    #[test]
+    fn test_integer_does_not_bind_to_record_kinded_generic() {
+        let context = Context::default();
+        let kinded = Type::KindedGen(Kind::Record, "R".to_string(), HelpData::default());
+        let bindings = unify(&context, &builder::integer_type_default(), &kinded);
+        assert!(
+            bindings.is_empty(),
+            "an int should not unify with a %R-kinded generic, got: {:?}",
+            bindings
+        );
+    }
+
+    #[test]
+    fn test_record_binds_to_record_kinded_generic() {
+        let context = Context::default();
+        let kinded = Type::KindedGen(Kind::Record, "R".to_string(), HelpData::default());
+        let record = builder::record_type(&[("x".to_string(), builder::integer_type_default())]);
+        let bindings = unify(&context, &record, &kinded);
+        assert!(
+            !bindings.is_empty(),
+            "a record should unify with a %R-kinded generic"
+        );
+    }
 }

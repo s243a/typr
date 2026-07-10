@@ -1,0 +1,36 @@
+[package]
+name = "typr-lsp"
+description = "LSP server for TypR"
+keywords = ["R", "type-checker", "lsp"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+typr-core.workspace = true
+
+nom.workspace = true
+nom_locate.workspace = true
+
+# Pure dependencies (needed for parsing/type manipulation)
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+miette.workspace = true
+rpds.workspace = true
+indexmap.workspace = true
+tap.workspace = true
+rand.workspace = true
+anyhow.workspace = true
+toml.workspace = true
+
+# System dependencies
+tokio.workspace = true
+tower-lsp-server.workspace = true
+syntect.workspace = true
+bincode.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true

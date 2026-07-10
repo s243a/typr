@@ -1,7 +1,11 @@
 use crate::components::error_message::help_data::HelpData;
 use crate::components::language::Lang;
+use crate::components::r#type::tint::Tint;
+use crate::components::r#type::type_system::TypeSystem;
+use crate::components::r#type::vector_type::VecType;
 use crate::components::r#type::Type;
 use crate::processes::parsing::operation_priority::TokenKind;
+use crate::utils::builder;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::bytes::complete::take_until;
@@ -50,6 +54,72 @@ pub enum Op {
     Dollar2(HelpData),
     Custom(String, HelpData),
     Empty(HelpData),
+    AsExcl(HelpData),
+}
+
+/// Reinterprets the value-level AST produced for a bracket type expression
+/// (`[Any, int]`, `Vec[N, T]`, `Array[N, T]`) appearing as the right-hand side
+/// of `as!` as the `Type` it denotes. These shapes parse as plain `Lang`
+/// values (`Array`/`ArrayIndexing`/`Variable`) since `as!`'s right operand
+/// goes through the ordinary expression grammar, not the type grammar — see
+/// `Op::combine`. The `Vec`/`Array` keyword prefix is not preserved in the
+/// resulting `VecType` since `Type`'s `PartialEq` ignores it anyway (it only
+/// matters for named aliases, which inline literals are not).
+fn lang_to_cast_type(lang: &Lang) -> Option<Type> {
+    match lang {
+        Lang::Variable {
+            name, help_data, ..
+        } => Some(match name.as_str() {
+            "int" => builder::integer_type_default(),
+            "num" => builder::number_type(),
+            "bool" => builder::boolean_type(),
+            "char" => builder::character_type_default(),
+            "Any" => builder::any_type(),
+            _ => Type::Alias(name.clone(), vec![], false, help_data.clone()),
+        }),
+        Lang::Integer { value, help_data } => {
+            Some(Type::Integer(Tint::Val(*value), help_data.clone()))
+        }
+        Lang::Array { value, help_data } => {
+            let (idx, elem) = match value.as_slice() {
+                [elem] => (builder::any_type(), elem),
+                [idx, elem] => (lang_to_cast_type(idx)?, elem),
+                _ => return None,
+            };
+            Some(Type::Vec(
+                VecType::S3,
+                Box::new(idx),
+                Box::new(lang_to_cast_type(elem)?),
+                help_data.clone(),
+            ))
+        }
+        Lang::ArrayIndexing {
+            identifier,
+            indexing,
+            help_data,
+        } => {
+            match identifier.as_ref() {
+                Lang::Variable { name, .. } if name == "Vec" || name == "Array" => {}
+                _ => return None,
+            }
+            let value = match indexing.as_ref() {
+                Lang::Array { value, .. } => value,
+                _ => return None,
+            };
+            let (idx, elem) = match value.as_slice() {
+                [elem] => (builder::any_type(), elem),
+                [idx, elem] => (lang_to_cast_type(idx)?, elem),
+                _ => return None,
+            };
+            Some(Type::Vec(
+                VecType::S3,
+                Box::new(idx),
+                Box::new(lang_to_cast_type(elem)?),
+                help_data.clone(),
+            ))
+        }
+        _ => None,
+    }
 }
 
 impl Op {
@@ -66,6 +136,7 @@ impl Op {
 
     pub fn get_binding_power(&self) -> i32 {
         match self {
+            Op::AsExcl(_) => 4,
             Op::Dot(_)
             | Op::Dot2(_)
             | Op::Pipe(_)
@@ -87,16 +158,32 @@ impl Op {
     }
 
     pub fn combine(self, left: Lang, right: Lang) -> Lang {
-        Lang::Operator(
-            self,
-            Box::new(left.clone()),
-            Box::new(right),
-            left.get_help_data(),
-        )
+        if let Op::AsExcl(_) = self {
+            let (type_name, literal_type) = match &right {
+                Lang::Variable { name, .. } => (name.clone(), None),
+                _ => match lang_to_cast_type(&right) {
+                    Some(t) => (t.pretty(), Some(t)),
+                    None => ("Unknown".to_string(), None),
+                },
+            };
+            return Lang::ValidatingCast {
+                expression: Box::new(left.clone()),
+                type_name,
+                literal_type,
+                help_data: left.get_help_data(),
+            };
+        }
+        Lang::Operator {
+            operator: self,
+            rhs: Box::new(left.clone()),
+            lhs: Box::new(right),
+            help_data: left.get_help_data(),
+        }
     }
 
     pub fn get_help_data(&self) -> HelpData {
         match self {
+            Op::AsExcl(h) => h.clone(),
             Op::Empty(h) => h.clone(),
             Op::Custom(_, h) => h.clone(),
             Op::Dollar(h) => h.clone(),
@@ -134,6 +221,12 @@ impl Op {
 }
 
 fn bool_op(s: Span) -> IResult<Span, Span> {
+    // Deliberately no bare `tag("=")` alternative here: a single `=` is never
+    // a binary operator in TypR (`Op::Eq2` has no handling anywhere in
+    // type-checking/transpiling — it would panic via `compute_operators`'s
+    // catch-all if ever produced). `=` is reserved for dedicated grammar
+    // positions parsed directly elsewhere: named record fields (`x = 1`),
+    // `assign()`'s `x = expr;`, and `fn(...)` default parameter values.
     terminated(
         alt((
             tag("<="),
@@ -148,7 +241,6 @@ fn bool_op(s: Span) -> IResult<Span, Span> {
             tag("or"),
             tag("||"),
             tag("|"),
-            tag("="),
         )),
         multispace0,
     )
@@ -171,6 +263,7 @@ fn get_op(ls: LocatedSpan<&str, String>) -> Op {
         "%" => Op::Modulo(ls.into()),
         "|>" => Op::Pipe(ls.into()),
         "|>>" => Op::Pipe2(ls.into()),
+        "::" => Op::Dollar(ls.into()),
         "=" => Op::Eq2(ls.into()),
         "." => Op::Dot(ls.into()),
         ".." => Op::Dot2(ls.into()),
@@ -201,6 +294,7 @@ fn pipe_op(s: Span) -> IResult<Span, Span> {
     alt((
         tag("|>>"),
         tag("|>"),
+        tag("::"),
         tag(".."),
         tag("."),
         tag("$$"),
@@ -240,6 +334,7 @@ pub fn op(s: Span) -> IResult<Span, Op> {
 
 pub fn get_string(op: &Op) -> String {
     match op {
+        Op::AsExcl(_) => "as!".to_string(),
         Op::In(_) => "in".to_string(),
         Op::And(_) => "&".to_string(),
         Op::And2(_) => "&&".to_string(),
@@ -270,10 +365,7 @@ pub fn get_string(op: &Op) -> String {
         Op::Eq(_) => "==".to_string(),
         Op::Eq2(_) => "=".to_string(),
         Op::NotEq(_) => "!=".to_string(),
-        n => {
-            dbg!(n);
-            todo!()
-        }
+        n => todo!("operator to_string not implemented for {:?}", n),
     }
 }
 

@@ -6,19 +6,19 @@
     unused_assignments
 )]
 
-use crate::components::error_message::type_error::TypeError;
-use crate::components::r#type::argument_type::ArgumentType;
-use crate::components::r#type::type_operator::TypeOperator;
 use crate::components::error_message::help_data::HelpData;
-use crate::components::r#type::vector_type::VecType;
+use crate::components::error_message::type_error::TypeError;
 use crate::components::language::operators::Op;
-use crate::components::r#type::tchar::Tchar;
-use crate::components::r#type::tint::Tint;
 use crate::components::language::var::Var;
 use crate::components::language::Lang;
+use crate::components::r#type::argument_type::ArgumentType;
+use crate::components::r#type::tchar::Tchar;
+use crate::components::r#type::tint::Tint;
+use crate::components::r#type::type_operator::TypeOperator;
+use crate::components::r#type::vector_type::VecType;
 use crate::components::r#type::Type;
-use std::collections::HashSet;
 use crate::TypRError;
+use std::collections::HashSet;
 
 pub fn generic_type() -> Type {
     Type::Generic("T".to_string(), HelpData::default())
@@ -57,11 +57,17 @@ pub fn character_type_default() -> Type {
 }
 
 pub fn number_type() -> Type {
-    Type::Number(HelpData::default())
+    Type::Number(
+        crate::components::r#type::tnumber::Tnum::Unknown,
+        HelpData::default(),
+    )
 }
 
 pub fn boolean_type() -> Type {
-    Type::Boolean(HelpData::default())
+    Type::Boolean(
+        crate::components::r#type::tbool::Tbool::Unknown,
+        HelpData::default(),
+    )
 }
 
 pub fn record_type(params: &[(String, Type)]) -> Type {
@@ -78,7 +84,10 @@ pub fn params_type() -> Type {
 
 pub fn generic_function(s: &str) -> Lang {
     let body = format!("{} <- function(x, ...) {{ UseMethod('{}') }}", s, s);
-    Lang::GenFunc(body, "".to_string(), HelpData::default())
+    Lang::GenFunc {
+        name: body,
+        help_data: HelpData::default(),
+    }
 }
 
 pub fn tuple_type(types: &[Type]) -> Type {
@@ -86,20 +95,23 @@ pub fn tuple_type(types: &[Type]) -> Type {
 }
 
 pub fn array_type(i: Type, t: Type) -> Type {
-    Type::Vec(
-        VecType::Array,
-        Box::new(i),
-        Box::new(t),
-        HelpData::default(),
-    )
+    Type::Vec(VecType::S3, Box::new(i), Box::new(t), HelpData::default())
 }
 
 pub fn array_type2(i: i32, t: Type) -> Type {
     let i2 = integer_type(i);
+    Type::Vec(VecType::S3, Box::new(i2), Box::new(t), HelpData::default())
+}
+
+pub fn dataframe_type(i: Type, columns: &[(String, Type)]) -> Type {
+    let fields = columns
+        .iter()
+        .map(|param| ArgumentType::from(param.to_owned()))
+        .collect::<HashSet<_>>();
     Type::Vec(
-        VecType::Array,
-        Box::new(i2),
-        Box::new(t),
+        VecType::DataFrame,
+        Box::new(i),
+        Box::new(Type::Record(fields, HelpData::default())),
         HelpData::default(),
     )
 }
@@ -109,7 +121,15 @@ pub fn opaque_type(name: &str) -> Type {
 }
 
 pub fn function_type(args: &[Type], return_type: Type) -> Type {
-    Type::Function(args.to_vec(), Box::new(return_type), HelpData::default())
+    let arg_types: Vec<ArgumentType> = args
+        .iter()
+        .enumerate()
+        .map(|(i, typ)| {
+            let arg_name = crate::components::r#type::generate_arg(i);
+            ArgumentType::new(&arg_name, typ)
+        })
+        .collect();
+    Type::Function(arg_types, Box::new(return_type), HelpData::default())
 }
 
 pub fn interface_type(signatures: &[(&str, Type)]) -> Type {
@@ -131,8 +151,18 @@ pub fn interface_type2(signatures: &[(String, Type)]) -> Type {
 }
 
 pub fn intersection_type(types: &[Type]) -> Type {
-    let type_set = types.iter().cloned().collect::<HashSet<_>>();
-    Type::Intersection(type_set, HelpData::default())
+    types
+        .iter()
+        .cloned()
+        .reduce(|acc, t| {
+            Type::Operator(
+                TypeOperator::Intersection,
+                Box::new(acc),
+                Box::new(t),
+                HelpData::default(),
+            )
+        })
+        .unwrap_or(Type::Empty(HelpData::default()))
 }
 
 pub fn union_type(types: &[Type]) -> Type {
@@ -155,21 +185,30 @@ pub fn unknown_function_type() -> Type {
 }
 
 pub fn operation(operator: Op, left: Lang, right: Lang) -> Lang {
-    Lang::Operator(
+    Lang::Operator {
         operator,
-        Box::new(left),
-        Box::new(right),
-        HelpData::default(),
-    )
+        rhs: Box::new(left),
+        lhs: Box::new(right),
+        help_data: HelpData::default(),
+    }
 }
 
 pub fn let_var(name: &str, typ: Type) -> (Var, Type) {
     (Var::from(name).set_type(typ.clone()), typ)
 }
 
+pub fn null_type() -> Type {
+    Type::Null(HelpData::default())
+}
+
+pub fn na_type() -> Type {
+    Type::NA(HelpData::default())
+}
+
+pub fn null_lang() -> Lang {
+    Lang::Null(HelpData::default())
+}
+
 pub fn unmatching_return_type(typ1: &Type, typ2: &Type) -> TypRError {
-    TypRError::Type(TypeError::UnmatchingReturnType(
-        typ1.clone(),
-        typ2.clone(),
-    ))
+    TypRError::Type(TypeError::UnmatchingReturnType(typ1.clone(), typ2.clone()))
 }

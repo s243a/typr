@@ -149,7 +149,12 @@ impl Var {
 
     pub fn from_language(l: Lang) -> Option<Var> {
         match l {
-            Lang::Variable(name, muta, typ, h) => Some(Var {
+            Lang::Variable {
+                name,
+                is_opaque: muta,
+                related_type: typ,
+                help_data: h,
+            } => Some(Var {
                 name,
                 is_opaque: muta,
                 related_type: typ,
@@ -189,7 +194,12 @@ impl Var {
     }
 
     pub fn to_language(self) -> Lang {
-        Lang::Variable(self.name, self.is_opaque, self.related_type, self.help_data)
+        Lang::Variable {
+            name: self.name,
+            is_opaque: self.is_opaque,
+            related_type: self.related_type,
+            help_data: self.help_data,
+        }
     }
 
     pub fn set_name(self, s: &str) -> Var {
@@ -205,7 +215,7 @@ impl Var {
         let typ = match typ {
             Type::Function(params, _, h) => {
                 if !params.is_empty() {
-                    params[0].clone()
+                    params[0].get_type()
                 } else {
                     Type::Any(h)
                 }
@@ -294,21 +304,25 @@ impl Var {
     }
 
     pub fn to_alias_lang(self) -> Lang {
-        Lang::Alias(
-            Box::new(self.clone().to_language()),
-            vec![],
-            builder::unknown_function_type(),
-            self.get_help_data(),
-        )
+        Lang::Alias {
+            identifier: Box::new(self.clone().to_language()),
+            parameters: vec![],
+            target_type: builder::unknown_function_type(),
+            is_public: false,
+            help_data: self.get_help_data(),
+        }
     }
 
     pub fn to_let(self) -> Lang {
-        Lang::Let(
-            Box::new(self.clone().to_language()),
-            builder::unknown_function_type(),
-            Box::default(),
-            self.get_help_data(),
-        )
+        Lang::Let {
+            variable: Box::new(self.clone().to_language()),
+            r#type: builder::unknown_function_type(),
+            expression: Box::default(),
+            is_public: false,
+            is_testable: false,
+            is_export: false,
+            help_data: self.get_help_data(),
+        }
     }
 
     pub fn contains(&self, s: &str) -> bool {
@@ -324,7 +338,23 @@ impl Var {
         if !self.get_name().contains(".") {
             let type_str = match self.get_type() {
                 Type::Empty(_) | Type::Any(_) => "".to_string(),
-                ty => ".".to_string() + &cont.get_class(&ty).replace("'", ""),
+                ty => {
+                    // Only add the S3 suffix when the variable is a known S3 method
+                    // binding: context must have an entry for this name with a non-Empty
+                    // related_type (set by the parser's let-fn path). Local closures and
+                    // partial-application results are stored with Empty related_type and
+                    // must not receive the suffix even if set_related_type_if_variable
+                    // temporarily gave them a non-Empty type for dispatch resolution.
+                    let is_method = cont
+                        .get_functions_from_name(&self.get_name())
+                        .iter()
+                        .any(|(v, _)| !matches!(v.get_type(), Type::Empty(_)));
+                    if is_method {
+                        ".".to_string() + &cont.get_class(&ty).replace("'", "")
+                    } else {
+                        "".to_string()
+                    }
+                }
             };
             let new_name = if self.contains("`") {
                 "`".to_string() + &self.get_name().replace("`", "") + &type_str + "`"
@@ -378,7 +408,12 @@ impl TryFrom<Lang> for Var {
 
     fn try_from(value: Lang) -> Result<Self, Self::Error> {
         match value {
-            Lang::Variable(name, muta, typ, h) => Ok(Var {
+            Lang::Variable {
+                name,
+                is_opaque: muta,
+                related_type: typ,
+                help_data: h,
+            } => Ok(Var {
                 name,
                 is_opaque: muta,
                 related_type: typ,
