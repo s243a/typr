@@ -19,7 +19,15 @@
 @expect_true: (bool) -> Empty;
 @expect_false: (T, T) -> Empty;
 @expect_equal: (T, T) -> Empty;
-@print: (Any) -> Empty;
+# Variadic base-R calls. Any preserves heterogeneous named dots.
+@cat: (...Any) -> Empty;
+@print: (Any, ...Any) -> Empty;
+@paste: (...Any) -> char;
+@paste0: (...Any) -> char;
+@sprintf: (char, ...Any) -> char;
+@message: (...Any) -> Empty;
+@warning: (...Any) -> Empty;
+@c: (...T) -> [#N, T];
 @to_native: (T) -> T;
 @from_native: (Any, char) -> Any;
 @from_int: (Any) -> int;

@@ -89,6 +89,12 @@ impl FunctionType {
         self.is_variadic
     }
 
+    pub fn fixed_arity(&self) -> usize {
+        self.arguments
+            .len()
+            .saturating_sub(usize::from(self.is_variadic))
+    }
+
     pub fn min_arity(&self) -> usize {
         self.min_arity
     }

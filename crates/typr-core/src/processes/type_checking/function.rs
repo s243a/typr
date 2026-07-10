@@ -931,6 +931,115 @@ mod tests {
     }
 
     #[test]
+    fn test_variadic_any_accepts_named_heterogeneous_arguments() {
+        use crate::components::context::Context;
+        use crate::processes::parsing::parse2;
+        use crate::processes::type_checking::type_checker::TypeChecker;
+
+        let declaration =
+            parse2("let capture <- fn(...args: Any): [#N, Any] { args };".into()).unwrap();
+        let checker = TypeChecker::new(Context::default()).typing_no_panic(&declaration);
+        let call = parse2("capture(count = 1, label = \"x\", enabled = true)".into()).unwrap();
+        let result = checker.typing_no_panic(&call);
+        assert!(
+            !result.has_errors(),
+            "heterogeneous named dots errors: {:?}",
+            result.get_errors()
+        );
+    }
+
+    #[test]
+    fn test_standard_r_variadic_declarations_accept_realistic_calls() {
+        use crate::components::context::Context;
+        use crate::processes::parsing::parse2;
+        use crate::processes::type_checking::type_checker::TypeChecker;
+
+        let checker = TypeChecker::new(Context::default());
+        for call in [
+            r#"cat(1, "x", label = true)"#,
+            r#"print("x", quote = false)"#,
+            r#"paste("x", 1, sep = "-")"#,
+            r#"paste0("x", 1)"#,
+            r#"sprintf("%s=%d", "x", 1)"#,
+            r#"message("x", appendLF = false)"#,
+            r#"warning("x", immediate = true)"#,
+        ] {
+            let parsed = parse2(call.into()).unwrap();
+            let result = checker.clone().typing_no_panic(&parsed);
+            assert!(
+                !result.has_errors(),
+                "standard variadic call {call} errors: {:?}",
+                result.get_errors()
+            );
+        }
+    }
+
+    #[test]
+    fn test_opaque_raw_r_result_flows_into_typed_binding() {
+        use crate::components::context::Context;
+        use crate::processes::parsing::parse2;
+        use crate::processes::type_checking::type_checker::TypeChecker;
+
+        let code = parse2(
+            r#"let alias_after_output <- fn(arg1: char, arg2: char): char {
+                let value <- @{ tolower(arg1) }@;
+                arg2 <- value;
+                arg2
+            };"#
+            .into(),
+        )
+        .unwrap();
+        let result = TypeChecker::new(Context::default()).typing_no_panic(&code);
+        assert!(
+            !result.has_errors(),
+            "opaque raw R assignment errors: {:?}",
+            result.get_errors()
+        );
+    }
+
+    #[test]
+    fn test_variadic_pack_forwarding_type_checks() {
+        use crate::components::context::Context;
+        use crate::processes::parsing::parse2;
+        use crate::processes::type_checking::type_checker::TypeChecker;
+
+        let code = parse2(
+            "let pack_sink_xyz <- fn(prefix: char, ...values: num): num { sum(values) };\n             let forward <- fn(prefix: char, ...args: num): num {\n                 pack_sink_xyz(prefix, ...args)\n             };"
+                .into(),
+        )
+        .unwrap();
+        let result = TypeChecker::new(Context::default()).typing_no_panic(&code);
+        assert!(
+            !result.has_errors(),
+            "forwarded variadic pack errors: {:?}",
+            result.get_errors()
+        );
+    }
+
+    #[test]
+    fn test_variadic_pack_rejects_scalar_source() {
+        use crate::components::context::Context;
+        use crate::processes::parsing::parse2;
+        use crate::processes::type_checking::type_checker::TypeChecker;
+
+        let declaration =
+            parse2("let pack_sink_xyz <- fn(...values: num): num { sum(values) };".into()).unwrap();
+        let checker = TypeChecker::new(Context::default()).typing_no_panic(&declaration);
+        let call = parse2("pack_sink_xyz(...1.0)".into()).unwrap();
+        assert!(matches!(
+            &call,
+            Lang::FunctionApp { arguments, .. }
+                if matches!(arguments.as_slice(), [Lang::SpreadArgument { .. }])
+        ));
+        let result = checker.typing_no_panic(&call);
+        assert!(
+            result.has_errors(),
+            "scalar spread source should be rejected: {:?}",
+            result.get_errors()
+        );
+    }
+
+    #[test]
     fn test_default_param_parses_with_default_attached() {
         let res = FluentParser::new().check_typing("fn(a: int, b: int = 10): int { a + b }");
         let expected = Type::Function(

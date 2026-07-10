@@ -56,6 +56,13 @@ typr_spread_record <- function(explicit, spread) {
 
 # --- Génériques S3 ---
 
+# Convert a TypR argument pack into the named R list expected by do.call().
+typr_call_args <- function(x) {
+  if (inherits(x, "typed_vec")) return(x$data)
+  if (is.list(x)) return(x)
+  as.list(x)
+}
+
 get <- function(a, ...) UseMethod("get")
 apply <- function(X, ...) UseMethod("apply")
 reduce <- function(vec, ...) UseMethod("reduce")

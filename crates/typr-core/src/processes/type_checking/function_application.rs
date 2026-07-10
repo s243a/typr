@@ -753,6 +753,10 @@ fn substitute_type_in_lang(lang: &Lang, subs: &std::collections::HashMap<String,
                 .collect(),
             help_data: h.clone(),
         },
+        Lang::SpreadArgument { value, help_data } => Lang::SpreadArgument {
+            value: Box::new(substitute_type_in_lang(value, subs)),
+            help_data: help_data.clone(),
+        },
         Lang::VecFunctionApp {
             vector_type: vec_type,
             identifier: func,
@@ -1257,6 +1261,36 @@ fn filter_named_generic(
     try_named_generic_match(sigs, types, ctx)
 }
 
+fn forwarded_argument_types(
+    context: &Context,
+    parameters: &[Lang],
+    types: &[Type],
+) -> Option<Vec<Type>> {
+    let mut forwarded = Vec::new();
+    for (parameter, typ) in parameters.iter().zip(types.iter()) {
+        if matches!(parameter, Lang::SpreadArgument { .. }) {
+            match reduce_type(context, typ) {
+                Type::Vec(_, _, element, _) => forwarded.push(*element),
+                Type::Tuple(elements, _) => forwarded.extend(elements),
+                Type::Record(fields, _) => {
+                    forwarded.extend(fields.iter().map(ArgumentType::get_type));
+                }
+                _ => return None,
+            }
+        } else {
+            forwarded.push(typ.clone());
+        }
+    }
+    Some(forwarded)
+}
+
+fn spread_arguments_are_trailing(parameters: &[Lang]) -> bool {
+    parameters
+        .iter()
+        .skip_while(|p| !matches!(p, Lang::SpreadArgument { .. }))
+        .all(|p| matches!(p, Lang::SpreadArgument { .. }))
+}
+
 fn apply_from_variable_inner(
     var: Var,
     context: &Context,
@@ -1267,6 +1301,45 @@ fn apply_from_variable_inner(
         get_expanded_parameters_with_their_types(context, parameters);
     let context = &arg_context;
     let all_signatures = var.get_functions_from_name(context);
+
+    let has_spread = expanded_parameters
+        .iter()
+        .any(|p| matches!(p, Lang::SpreadArgument { .. }));
+    if has_spread {
+        let explicit_prefix = expanded_parameters
+            .iter()
+            .take_while(|p| !matches!(p, Lang::SpreadArgument { .. }))
+            .count();
+        let matched = spread_arguments_are_trailing(&expanded_parameters)
+            .then(|| forwarded_argument_types(context, &expanded_parameters, &types))
+            .flatten()
+            .and_then(|dispatch_types| {
+                all_signatures
+                    .iter()
+                    .filter(|sig| sig.is_variadic() && sig.fixed_arity() <= explicit_prefix)
+                    .find_map(|sig| sig.clone().infer_return_type(&dispatch_types, context))
+            });
+        if let Some(fun_typ) = matched {
+            let (final_params, final_types) =
+                specialize_lambdas(context, &expanded_parameters, &types, &fun_typ);
+            return build_success(
+                &var,
+                &fun_typ,
+                final_params,
+                &final_types,
+                param_errors,
+                context,
+                h,
+            );
+        }
+
+        let mut errors = param_errors;
+        errors.push(TypRError::Type(TypeError::FunctionNotFound(
+            var.clone().set_type_from_params(parameters, context),
+        )));
+        return TypeContext::new(builder::any_type(), Lang::Empty(h.clone()), context.clone())
+            .with_errors(errors);
+    }
 
     let filters: &[FilterStep] = &[
         FilterStep {

@@ -88,6 +88,11 @@ pub enum Lang {
         arguments: Vec<Lang>,
         help_data: HelpData,
     },
+    /// Splice a vector/tuple/list into a function call: `f(...args)`.
+    SpreadArgument {
+        value: Box<Lang>,
+        help_data: HelpData,
+    },
     VecFunctionApp {
         vector_type: VecType,
         identifier: Box<Lang>,
@@ -420,6 +425,9 @@ impl PartialEq for Lang {
                     ..
                 },
             ) => a1 == b1 && a2 == b2,
+            (Lang::SpreadArgument { value: a, .. }, Lang::SpreadArgument { value: b, .. }) => {
+                a == b
+            }
             (
                 Lang::VecFunctionApp {
                     vector_type: a0,
@@ -983,6 +991,7 @@ impl Lang {
             Lang::Module { help_data: h, .. } => h,
             Lang::Variable { help_data: h, .. } => h,
             Lang::FunctionApp { help_data: h, .. } => h,
+            Lang::SpreadArgument { help_data: h, .. } => h,
             Lang::VecFunctionApp { help_data: h, .. } => h,
             Lang::ArrayIndexing { help_data: h, .. } => h,
             Lang::Let { help_data: h, .. } => h,
@@ -1082,6 +1091,7 @@ impl Lang {
                 "FunctionApp({})",
                 Var::from_language(*(var.clone())).unwrap().get_name()
             ),
+            Lang::SpreadArgument { .. } => "SpreadArgument".to_string(),
             Lang::VecFunctionApp {
                 vector_type: vec_typ,
                 identifier: var,
@@ -1536,6 +1546,7 @@ impl From<Lang> for HelpData {
             Lang::Variable { help_data: h, .. } => h,
             Lang::Match { help_data: h, .. } => h,
             Lang::FunctionApp { help_data: h, .. } => h,
+            Lang::SpreadArgument { help_data: h, .. } => h,
             Lang::VecFunctionApp { help_data: h, .. } => h,
             Lang::Empty(h) => h,
             Lang::Array { help_data: h, .. } => h,

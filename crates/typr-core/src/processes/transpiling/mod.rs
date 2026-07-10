@@ -77,6 +77,63 @@ fn array_literal_raw(array: &Lang, cont: &Context) -> String {
     }
 }
 
+fn render_spread_call(
+    callee: &str,
+    values: &[Lang],
+    cont: &Context,
+    convert_native: bool,
+) -> Option<(String, Context)> {
+    if !values
+        .iter()
+        .any(|value| matches!(value, Lang::SpreadArgument { .. }))
+    {
+        return None;
+    }
+
+    let (parts, current_cont) = values.iter().fold(
+        (Vec::new(), cont.clone()),
+        |(mut rendered, current), value| {
+            let (part, next) = match value {
+                Lang::SpreadArgument { value, .. } => {
+                    let (source, next) = value.to_r(&current);
+                    let args = format!("typr_call_args({})", source);
+                    if convert_native {
+                        (format!("lapply({}, to_native)", args), next)
+                    } else {
+                        (args, next)
+                    }
+                }
+                Lang::KeyValue { key, value, .. } => {
+                    let (source, next) = value.to_r(&current);
+                    let source = if convert_native {
+                        format!("to_native({})", source)
+                    } else {
+                        source
+                    };
+                    (format!("list({} = {})", key.trim(), source), next)
+                }
+                _ => {
+                    let (source, next) = value.to_r(&current);
+                    let source = if convert_native {
+                        format!("to_native({})", source)
+                    } else {
+                        source
+                    };
+                    (format!("list({})", source), next)
+                }
+            };
+            rendered.push(part);
+            (rendered, next)
+        },
+    );
+    let arguments = if parts.len() == 1 {
+        parts[0].clone()
+    } else {
+        format!("c({})", parts.join(", "))
+    };
+    Some((format!("do.call({}, {})", callee, arguments), current_cont))
+}
+
 // Thread-local storage for generated files (used in WASM mode)
 thread_local! {
     static GENERATED_FILES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
@@ -876,15 +933,23 @@ impl RTranslatable<(String, Context)> for Lang {
                                 .map(|ft| ft.get_return_type())
                                 .expect("extern function application identifier should have a function type");
                             let lift_fn = extern_lift_fn(&return_type);
-                            let (args_vec, current_cont): (Vec<String>, Context) = new_vals
-                                .iter()
-                                .fold((Vec::new(), cont1.clone()), |(mut v, c), val| {
-                                    let (s, c2) = val.to_r(&c);
-                                    v.push(format!("to_native({})", s));
-                                    (v, c2)
-                                });
-                            let args = args_vec.join(", ");
-                            let call = format!("{}({})", r_name, args);
+                            let (call, current_cont) = render_spread_call(
+                                &r_name,
+                                &new_vals,
+                                &cont1,
+                                true,
+                            )
+                            .unwrap_or_else(|| {
+                                let (args_vec, current_cont): (Vec<String>, Context) = new_vals
+                                    .iter()
+                                    .fold((Vec::new(), cont1.clone()), |(mut v, c), val| {
+                                        let (s, c2) = val.to_r(&c);
+                                        v.push(format!("to_native({})", s));
+                                        (v, c2)
+                                    });
+                                let args = args_vec.join(", ");
+                                (format!("{}({})", r_name, args), current_cont)
+                            });
                             let result = match lift_fn {
                                 Some(f) => format!("{}({})", f, call),
                                 None => call,
@@ -894,20 +959,26 @@ impl RTranslatable<(String, Context)> for Lang {
                             let r_name = cont1
                                 .get_import_from_r_name(&name)
                                 .unwrap_or_else(|| new_name.clone());
-                            let (args, current_cont) =
-                                Translatable::from(cont1).join(&new_vals, ", ").into();
-                            (format!("{}({})", r_name, args), current_cont)
+                            render_spread_call(&r_name, &new_vals, &cont1, false).unwrap_or_else(|| {
+                                let (args, current_cont) =
+                                    Translatable::from(cont1).join(&new_vals, ", ").into();
+                                (format!("{}({})", r_name, args), current_cont)
+                            })
                         } else {
-                            let (args, current_cont) =
-                                Translatable::from(cont1).join(&new_vals, ", ").into();
-                            (format!("{}({})", new_name, args), current_cont)
+                            render_spread_call(&new_name, &new_vals, &cont1, false).unwrap_or_else(|| {
+                                let (args, current_cont) =
+                                    Translatable::from(cont1).join(&new_vals, ", ").into();
+                                (format!("{}({})", new_name, args), current_cont)
+                            })
                         }
                     })
                     .unwrap_or_else(|| {
-                        let (args, current_cont) = Translatable::from(cont1_fallback)
-                            .join(&new_vals, ", ")
-                            .into();
-                        (format!("{}({})", exp_str, args), current_cont)
+                        render_spread_call(&exp_str, &new_vals, &cont1_fallback, false).unwrap_or_else(|| {
+                            let (args, current_cont) = Translatable::from(cont1_fallback)
+                                .join(&new_vals, ", ")
+                                .into();
+                            (format!("{}({})", exp_str, args), current_cont)
+                        })
                     })
             }
             Lang::VecFunctionApp {
@@ -1901,6 +1972,10 @@ impl RTranslatable<(String, Context)> for Lang {
                         .into();
                     (format!("{}({})", variant_name, body), current_cont)
                 }
+            }
+            Lang::SpreadArgument { value, .. } => {
+                let (source, next_cont) = value.to_r(cont);
+                (format!("typr_call_args({})", source), next_cont)
             }
             Lang::KeyValue {
                 key: k, value: v, ..
@@ -3702,6 +3777,42 @@ mod tests {
         assert!(r_str.contains("paste0(x, \"!\")"), "got: {r_str}");
         assert!(!r_str.contains("@{"), "raw marker leaked into R: {r_str}");
         assert!(!r_str.contains("}@"), "raw marker leaked into R: {r_str}");
+    }
+
+    #[test]
+    fn test_variadic_pack_forwarding_uses_do_call() {
+        let r_str = FluentParser::new()
+            .push(
+                "let pack_sink_xyz <- fn(prefix: char, ...values: Any): Any { values };",
+            )
+            .run()
+            .check_transpiling(
+                "let forward <- fn(prefix: char, ...args: Any): Any {\n                    pack_sink_xyz(prefix, ...args)\n                 };",
+            )
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            r_str.contains("do.call(pack_sink_xyz, c(list(prefix), typr_call_args(args)))"),
+            "expected forwarded do.call, got: {r_str}"
+        );
+    }
+
+    #[test]
+    fn test_spread_call_preserves_named_arguments() {
+        use crate::processes::parsing::parse2;
+
+        let parsed = parse2(r#"target(prefix, label = "named", ...args)"#.into()).unwrap();
+        let Lang::FunctionApp { arguments, .. } = parsed else {
+            panic!("expected function application");
+        };
+        let (r, _) = super::render_spread_call("target", &arguments, &Context::default(), false)
+            .expect("spread call should use do.call");
+        assert_eq!(
+            r,
+            r#"do.call(target, c(list(prefix), list(label = "named" |> as.Character()), typr_call_args(args)))"#
+        );
     }
 
     #[test]

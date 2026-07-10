@@ -1269,6 +1269,18 @@ pub fn typing(context: &Context, expr: &Lang) -> TypeContext {
                     .with_errors(all_errors)
             }
         }
+        Lang::SpreadArgument { value, help_data } => {
+            let value_tc = typing(context, value);
+            TypeContext::new(
+                value_tc.value,
+                Lang::SpreadArgument {
+                    value: Box::new(value_tc.lang),
+                    help_data: help_data.clone(),
+                },
+                value_tc.context,
+            )
+            .with_errors(value_tc.errors)
+        }
         Lang::FunctionApp {
             identifier: fn_var_name,
             arguments: values,
@@ -1591,10 +1603,10 @@ pub fn typing(context: &Context, expr: &Lang) -> TypeContext {
             TypeContext::new(Type::Tuple(types, h.clone()), expr.clone(), context.clone())
                 .with_errors(errors)
         }
-        // `@{ ... }@` is opaque raw R: TypR cannot infer its result, but it may
-        // legitimately be used wherever a value is expected.
-        Lang::VecBlock { .. } => {
-            TypeContext::new(builder::any_type(), expr.clone(), context.clone())
+        // Raw R is opaque. Retain the upstream Empty sentinel so its result
+        // can flow into an explicitly typed binding.
+        Lang::VecBlock { help_data: h, .. } => {
+            TypeContext::new(Type::Empty(h.clone()), expr.clone(), context.clone())
         }
         Lang::RFunction { help_data: h, .. } => TypeContext::new(
             Type::UnknownFunction(h.clone()),

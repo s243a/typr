@@ -528,9 +528,26 @@ fn key_value(s: Span) -> IResult<Span, Lang> {
     }
 }
 
+/// A call-site argument splice: `target(...args)`.
+///
+/// The source remains a first-class expression in the AST. Type checking
+/// validates its element types against the callee's trailing variadic type,
+/// while R transpilation expands its runtime list with `do.call`.
+fn spread_argument(s: Span) -> IResult<Span, Lang> {
+    let (s, start) = terminated(tag("..."), multispace0).parse(s)?;
+    let (s, value) = single_element.parse(s)?;
+    Ok((
+        s,
+        Lang::SpreadArgument {
+            value: Box::new(value),
+            help_data: start.into(),
+        },
+    ))
+}
+
 fn values(s: Span) -> IResult<Span, Vec<Lang>> {
     many0(terminated(
-        alt((key_value, parse_elements)),
+        alt((spread_argument, key_value, parse_elements)),
         terminated(opt(tag(",")), multispace0),
     ))
     .parse(s)
@@ -1677,6 +1694,31 @@ mod tests {
     fn test_variable1() {
         let res = variable_exp("hello".into()).unwrap().1 .0;
         assert_eq!(res, "hello", "Should return the variable name 'hello'");
+    }
+
+    #[test]
+    fn test_function_call_spread_argument() {
+        let (_, parsed) =
+            function_application("target(prefix, label = value, ...args)".into()).unwrap();
+        match parsed {
+            Lang::FunctionApp { arguments, .. } => {
+                assert_eq!(arguments.len(), 3);
+                assert!(matches!(arguments[1], Lang::KeyValue { .. }));
+                assert!(matches!(
+                    arguments[2],
+                    Lang::SpreadArgument { ref value, .. }
+                        if matches!(value.as_ref(), Lang::Variable { name, .. } if name == "args")
+                ));
+            }
+            other => panic!("expected FunctionApp, got {:?}", other),
+        }
+
+        let (_, scalar) = function_application("target(...1.0)".into()).unwrap();
+        assert!(matches!(
+            scalar,
+            Lang::FunctionApp { arguments, .. }
+                if matches!(arguments.as_slice(), [Lang::SpreadArgument { .. }])
+        ));
     }
 
     #[test]
