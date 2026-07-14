@@ -2121,7 +2121,23 @@ pub fn typing(context: &Context, expr: &Lang) -> TypeContext {
             expr.clone(),
             context.clone(),
         ),
-        Lang::KeyValue { value, .. } => typing(context, value),
+        Lang::KeyValue {
+            key,
+            value,
+            help_data,
+        } => {
+            let typed = typing(context, value);
+            TypeContext::new(
+                typed.value,
+                Lang::KeyValue {
+                    key: key.clone(),
+                    value: Box::new(typed.lang),
+                    help_data: help_data.clone(),
+                },
+                typed.context,
+            )
+            .with_errors(typed.errors)
+        }
         _ => builder::any_type().with_lang(expr, context).into(),
     }
 }
