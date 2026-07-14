@@ -970,16 +970,26 @@ fn dotdotdot(s: Span) -> IResult<Span, Lang> {
     }
 }
 
-fn else_exp(s: Span) -> IResult<Span, Lang> {
-    let res = (
-        terminated(tag("else"), multispace0),
+fn expression_block(s: Span) -> IResult<Span, Lang> {
+    let (s, (open, body, _close)) = (
         terminated(tag("{"), multispace0),
-        parse_elements,
-        terminated(tag("}"), multispace0),
+        opt(base_parse),
+        terminated(preceded(multispace0, tag("}")), multispace0),
     )
-        .parse(s);
+        .parse(s)?;
+    Ok((
+        s,
+        Lang::Lines {
+            value: body.unwrap_or_default(),
+            help_data: open.into(),
+        },
+    ))
+}
+
+fn else_exp(s: Span) -> IResult<Span, Lang> {
+    let res = (terminated(tag("else"), multispace0), expression_block).parse(s);
     match res {
-        Ok((s, (_else, _o, exp, _c))) => Ok((s, exp)),
+        Ok((s, (_else, exp))) => Ok((s, exp)),
         Err(r) => Err(r),
     }
 }
@@ -994,14 +1004,12 @@ fn if_exp(s: Span) -> IResult<Span, Lang> {
         terminated(tag("("), multispace0),
         parse_elements,
         terminated(tag(")"), multispace0),
-        terminated(tag("{"), multispace0),
-        parse_elements,
-        terminated(tag("}"), multispace0),
+        expression_block,
         opt(alt((else_if_exp, else_exp))),
     )
         .parse(s);
     match res {
-        Ok((s, (_if, _op, cond, _cp, _o, exp, _c, els))) => Ok((
+        Ok((s, (_if, _op, cond, _cp, exp, els))) => Ok((
             s,
             Lang::If {
                 condition: Box::new(cond),

@@ -216,6 +216,21 @@ length.typed_vec <- function(x) {
   }
 }
 
+# Preserve TypR's vector representation when native R concatenation is used
+# for the typed `c(vector, scalar)` append operation.
+c.typed_vec <- function(..., recursive = FALSE) {
+  values <- list(...)
+  data <- unlist(lapply(values, function(value) {
+    if (inherits(value, "typed_vec")) value$data else list(value)
+  }), recursive = FALSE)
+  first_typed <- values[vapply(values, inherits, logical(1), what = "typed_vec")][[1]]
+  structure(
+    list(data = data),
+    class = unique(c("typed_vec", class(first_typed))),
+    typed_dim = length(data)
+  )
+}
+
 get.typed_vec <- function(a, name) {
   a$data[[1]][[name]]
 }

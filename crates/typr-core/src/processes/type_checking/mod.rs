@@ -377,7 +377,9 @@ pub fn eval(context: &Context, expr: &Lang) -> TypeContext {
             let reduced_left_type = reduce_type(context, &left_type);
             let reduced_right_type = reduce_type(context, &right_type);
 
-            if reduced_right_type.is_subtype(&reduced_left_type, context).0 {
+            if reduced_right_type.is_subtype(&reduced_left_type, context).0
+                || is_shape_generic_vector_reassignment(&reduced_left_type, &reduced_right_type)
+            {
                 let Some(var) = Var::from_language((**left_expr).clone())
                     .map(|v| v.set_type(right_type.clone()))
                 else {
@@ -883,6 +885,21 @@ fn is_scalar_type(t: &Type) -> bool {
     !matches!(t, Type::Vec(..) | Type::Record(..) | Type::Tuple(..))
 }
 
+fn is_shape_generic_vector_reassignment(left: &Type, right: &Type) -> bool {
+    match (left, right) {
+        (
+            Type::Vec(left_kind, left_index, left_element, _),
+            Type::Vec(right_kind, _, right_element, _),
+        ) => {
+            matches!(left_index.as_ref(), Type::IndexGen(_, _))
+                && (left_kind.is_vector() || left_kind.is_array())
+                && (right_kind.is_vector() || right_kind.is_array())
+                && left_element.clone().generalize() == right_element.clone().generalize()
+        }
+        _ => false,
+    }
+}
+
 /// Statically add the sizes of vectors being concatenated.
 /// When every index is a concrete integer the sum is computed; otherwise the
 /// symbolic sum is preserved through nested `Type::Operator(Addition, …)` nodes.
@@ -903,8 +920,9 @@ fn vec_index_sum(indices: &[Type], h: &HelpData) -> Type {
     }
 }
 
-/// Rule 1 — vector concatenation: every argument is a vector/array sharing the
-/// same element type `T`. Result: `Vec[Σ nᵢ, T]`.
+/// Rule 1 — vector concatenation: every argument is either a vector/array or a
+/// scalar sharing the same element type `T`. Scalars contribute one element,
+/// matching R's `c(existing_vector, next_value)` append idiom.
 fn try_concat_vectors(types: &[Type], h: &HelpData) -> Option<Type> {
     let mut indices = Vec::new();
     let mut elem: Option<Type> = None;
@@ -918,6 +936,15 @@ fn try_concat_vectors(types: &[Type], h: &HelpData) -> Option<Type> {
                     _ => return None, // heterogeneous element types
                 }
                 indices.push((**idx).clone());
+            }
+            scalar if is_scalar_type(scalar) => {
+                let scalar_gen = scalar.clone().generalize();
+                match &elem {
+                    None => elem = Some(scalar_gen),
+                    Some(e) if *e == scalar_gen => {}
+                    _ => return None,
+                }
+                indices.push(builder::integer_type(1));
             }
             _ => return None,
         }
@@ -1104,6 +1131,36 @@ pub fn typing(context: &Context, expr: &Lang) -> TypeContext {
         Lang::Empty(h) => (Type::Empty(h.clone()), expr.clone(), context.clone()).into(),
         Lang::Break(h) => (Type::Empty(h.clone()), expr.clone(), context.clone()).into(),
         Lang::Next(h) => (Type::Empty(h.clone()), expr.clone(), context.clone()).into(),
+        Lang::WhileLoop {
+            condition,
+            body,
+            help_data: h,
+        } => {
+            let condition_tc = typing(context, condition);
+            let body_tc = typing(context, body);
+            let mut errors = condition_tc.errors.clone();
+            errors.extend(body_tc.errors.clone());
+
+            if !condition_tc.value.is_boolean() {
+                errors.push(TypRError::Type(TypeError::WrongExpression(
+                    condition.get_help_data(),
+                )));
+            }
+
+            TypeContext::new(
+                Type::Empty(h.clone()),
+                Lang::WhileLoop {
+                    condition: Box::new(condition_tc.lang),
+                    // Type-check the block for diagnostics, but retain its full
+                    // source AST. `Lang::Lines` historically reduces to its last
+                    // expression, which would otherwise delete loop increments.
+                    body: body.clone(),
+                    help_data: h.clone(),
+                },
+                context.clone(),
+            )
+            .with_errors(errors)
+        }
         Lang::Loop {
             body, help_data: h, ..
         } => {
@@ -1258,7 +1315,10 @@ pub fn typing(context: &Context, expr: &Lang) -> TypeContext {
                 let mut exprs2 = exprs.clone();
                 let exp = exprs2.pop().unwrap();
                 let mut all_errors = Vec::new();
-                let new_context = exprs.iter().fold(context2, |ctx, expr| {
+                // Type the prefix, then the final expression exactly once.
+                // Iterating `exprs` here used to evaluate the final assignment
+                // twice, making a single vector append appear to grow twice.
+                let new_context = exprs2.iter().fold(context2, |ctx, expr| {
                     let tc = typing(&ctx, expr);
                     all_errors.extend(tc.errors);
                     tc.context
@@ -1540,6 +1600,26 @@ pub fn typing(context: &Context, expr: &Lang) -> TypeContext {
                 };
                 return TypeContext::new(element_type, expr.clone(), context.clone())
                     .with_errors(errors);
+            }
+
+            // A single integer expression selects one element from a vector.
+            // This includes dynamic indices such as `items[i]`; the previous
+            // dimension-based path called `Lang::len()` on `i` and panicked.
+            if let (Type::Vec(_, _, element_type, _), Some(members)) =
+                (&typ1, index.get_members_if_array())
+            {
+                if members.len() == 1 {
+                    let index_tc = typing(context, &members[0]);
+                    errors.extend(index_tc.errors.clone());
+                    if matches!(index_tc.value, Type::Integer(_, _)) {
+                        return TypeContext::new(
+                            *element_type.clone(),
+                            expr.clone(),
+                            context.clone(),
+                        )
+                        .with_errors(errors);
+                    }
+                }
             }
 
             let args_target = typ1.clone().linearize();
@@ -2121,7 +2201,23 @@ pub fn typing(context: &Context, expr: &Lang) -> TypeContext {
             expr.clone(),
             context.clone(),
         ),
-        Lang::KeyValue { value, .. } => typing(context, value),
+        Lang::KeyValue {
+            key,
+            value,
+            help_data,
+        } => {
+            let typed = typing(context, value);
+            TypeContext::new(
+                typed.value,
+                Lang::KeyValue {
+                    key: key.clone(),
+                    value: Box::new(typed.lang),
+                    help_data: help_data.clone(),
+                },
+                typed.context,
+            )
+            .with_errors(typed.errors)
+        }
         _ => builder::any_type().with_lang(expr, context).into(),
     }
 }
@@ -2337,12 +2433,23 @@ mod tests {
     }
 
     #[test]
-    fn test_c_scalar_with_vector_is_error() {
-        // Rule 4: c(1, c(2, 3)) is a type error (no rule applies)
-        let fp = FluentParser::new().push("c(1, c(2, 3))").parse_type_next();
+    fn test_c_scalar_with_vector_appends_element() {
+        let typ = FluentParser::new().check_typing("c(c(1, 2), 3)");
+        assert_eq!(typ.pretty(), "Vec[3, int]");
+    }
+
+    #[test]
+    fn test_shape_generic_vector_can_grow_on_assignment() {
+        use crate::processes::parsing::parse_from_string;
+        let ast = parse_from_string(
+            "let items: [#N, int] <- [1]; items <- c(items, 2);",
+            "test.ty",
+        );
+        let result = typing_with_errors(&Context::default(), &ast);
         assert!(
-            !fp.get_last_log().is_empty(),
-            "Expected a type error for c(1, c(2, 3))"
+            !result.has_errors(),
+            "shape-generic vector assignment should accept append, got: {:?}",
+            result.errors
         );
     }
 
@@ -3811,6 +3918,42 @@ p"#;
     }
 
     #[test]
+    fn test_while_loop_boolean_condition_type_checks() {
+        use crate::processes::parsing::parse_from_string;
+        let ast = parse_from_string("let active <- true; while (active) { active; };", "test.ty");
+        let result = typing_with_errors(&Context::default(), &ast);
+        assert!(
+            !result.has_errors(),
+            "boolean while condition should type-check, got errors: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_while_loop_non_boolean_condition_errors() {
+        use crate::processes::parsing::parse_from_string;
+        let ast = parse_from_string("while (42) { 42; };", "test.ty");
+        let result = typing_with_errors(&Context::default(), &ast);
+        assert!(
+            result.has_errors(),
+            "non-boolean while condition should produce a typing error"
+        );
+    }
+
+    #[test]
+    fn test_if_block_supports_multiple_statements_and_assignment() {
+        use crate::processes::parsing::parse_from_string;
+        let source = "let choose <- fn(flag: bool): int { let out <- 0; if (flag) { out <- 1; out } else { out <- 2; out }; out };";
+        let ast = parse_from_string(source, "test.ty");
+        let result = typing_with_errors(&Context::default(), &ast);
+        assert!(
+            !result.has_errors(),
+            "multi-statement if branches should type-check, got errors: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
     fn test_for_loop_body_type_error_detected() {
         // The body is type-checked: binding `x` (int) to a `char` is an error.
         use crate::processes::parsing::parse_from_string;
@@ -3969,6 +4112,22 @@ p"#;
             matches!(t, Type::Char(..)),
             "a[2] on tuple should return char, got {:?}",
             t
+        );
+    }
+
+    #[test]
+    fn test_vector_dynamic_indexing_returns_element_type() {
+        let fp = FluentParser::new()
+            .push("let items: [#N, char] <- [\"a\", \"b\"]; ")
+            .run()
+            .push("let i <- 1;")
+            .run()
+            .push("items[i]")
+            .parse_type_next();
+        assert!(
+            matches!(fp.get_last_type(), Type::Char(..)),
+            "dynamic vector indexing should return char, got {:?}",
+            fp.get_last_type()
         );
     }
 
