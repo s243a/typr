@@ -24,7 +24,6 @@ use crate::processes::parsing::elements::next_exp;
 use crate::processes::parsing::elements::parse_elements;
 use crate::processes::parsing::elements::return_exp;
 use crate::processes::parsing::elements::scope;
-use crate::processes::parsing::elements::single_element;
 use crate::processes::parsing::elements::tag_exp;
 use crate::processes::parsing::elements::tuple_exp;
 use crate::processes::parsing::elements::variable;
@@ -1229,7 +1228,7 @@ fn for_loop(s: Span) -> IResult<Span, Vec<Lang>> {
         terminated(tag("("), multispace0),
         terminated(variable_exp, multispace0),
         terminated(tag("in"), multispace0),
-        terminated(single_element, multispace0),
+        terminated(parse_elements, multispace0),
         terminated(tag(")"), multispace0),
         scope,
         terminated(tag(";"), multispace0),
@@ -1253,7 +1252,7 @@ fn while_loop(s: Span) -> IResult<Span, Vec<Lang>> {
     let res = (
         terminated(tag("while"), multispace0),
         terminated(tag("("), multispace0),
-        terminated(single_element, multispace0),
+        terminated(parse_elements, multispace0),
         terminated(tag(")"), multispace0),
         scope,
         terminated(tag(";"), multispace0),

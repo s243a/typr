@@ -1257,7 +1257,7 @@ impl RTranslatable<(String, Context)> for Lang {
                         }
                     })
                     .unwrap_or((format!("{} <- {}", new_name, body_str), new_name));
-                let code = if !ttype.is_empty() {
+                let code = if !ttype.is_empty() && !ttype.has_generic() {
                     let type_annotation = new_cont.get_type_anotation(ttype);
                     format!("{} |> {}\n", r_code, type_annotation)
                 } else {
@@ -1364,6 +1364,20 @@ impl RTranslatable<(String, Context)> for Lang {
                     .add(" \n}")
                     .into()
             }
+            Lang::If {
+                condition: cond,
+                if_block: exp,
+                else_block: els,
+                help_data: _,
+            } if matches!(els.as_ref(), Lang::Lines { .. }) => Translatable::from(cont.clone())
+                .add("if(")
+                .to_r(cond)
+                .add(") {\n")
+                .to_r(exp)
+                .add(" \n} else {\n")
+                .to_r(els)
+                .add("\n}")
+                .into(),
             Lang::If {
                 condition: cond,
                 if_block: exp,
@@ -3852,6 +3866,60 @@ mod tests {
         assert!(
             !r_str.contains("as.Array0") && !r_str.contains("as.Generic"),
             "generic function and return types must not emit nonexistent casts: {r_str}"
+        );
+    }
+
+    #[test]
+    fn test_generic_vector_binding_skips_nonexistent_runtime_cast() {
+        let r_str = FluentParser::new()
+            .check_transpiling("let items: [#N, int] <- [1];")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            r_str.matches("as.Array").count(),
+            1,
+            "only the concrete literal cast should be emitted: {r_str}"
+        );
+    }
+
+    #[test]
+    fn test_multi_statement_if_retains_all_assignments() {
+        let r_str = transpile_program(&[
+            "let flag <- true;",
+            "let out <- 0;",
+            "if (flag) { out <- 1; out } else { out <- 2; out };",
+            "out;",
+        ]);
+        assert!(
+            r_str.contains("out <- 1"),
+            "true assignment was lost: {r_str}"
+        );
+        assert!(
+            r_str.contains("out <- 2"),
+            "false assignment was lost: {r_str}"
+        );
+        assert!(
+            r_str.contains("else {"),
+            "multi-statement else block needs R braces: {r_str}"
+        );
+    }
+
+    #[test]
+    fn test_while_loop_retains_all_body_statements() {
+        let r_str = transpile_program(&[
+            "let active <- true;",
+            "let i <- 0;",
+            "while (active) { if (active) { active <- false; }; i <- i + 1; };",
+        ]);
+        assert!(
+            r_str.contains("i <- i + 1"),
+            "loop increment was lost during type checking: {r_str}"
+        );
+        assert!(
+            r_str.contains("active <- FALSE"),
+            "later loop statement was lost during type checking: {r_str}"
         );
     }
 
